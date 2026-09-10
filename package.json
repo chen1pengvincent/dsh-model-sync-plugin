@@ -1,0 +1,39 @@
+{
+  "name": "dsh-model-sync",
+  "version": "0.2.0",
+  "private": true,
+  "description": "DSH 模型插件：监控各服务商上游 /models，列出新增模型并勾选添加（检查只读、显式应用、不自动删除）。Monitor provider model catalogs and add newly released models to DeepSeek Harness.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node --test tests/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chen1pengvincent/dsh-model-sync-plugin.git"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "model-sync",
+    "opencode",
+    "openrouter",
+    "deepseek"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "client": {
+      "inject": ["@deepseek-ai/dsh-client-runtime"],
+      "platform": "web"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
