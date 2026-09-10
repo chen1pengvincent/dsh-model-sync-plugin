@@ -68,6 +68,27 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 | `~/.dsh/model-sync/models.dev.json` | models.dev 元数据缓存（24h TTL，用于协议分类） |
 | `~/.dsh/model-sync/backups/` | settings.yaml 写前备份（最近 20 份） |
 
+## 已知问题与排查
+
+### DSH Desktop 2.0.6：official 路由报 `DeepSeek request extension preparation failed`
+
+**现象**：使用 `deepseek-official`（例如 V4.1 Flash）时，任何请求（包括自动标题生成）都失败，错误为 `DeepSeek request extension preparation failed`；opencode-go / openrouter 等 pi-ai 路由不受影响。
+
+**原因**：DSH Desktop 2.0.6 将内核移入 `app.asar` 后，默认开启的 `dsh-plugin-package-inventory-deepseek`（向 official 请求附加 `dsh_plugin_packages` 元数据）无法解析桌面端自身的活跃条目 `dsh-plugin-desktop`——它的清单就是 `app.asar` 根部的 `package.json`，不在任何 `node_modules` 搜索路径中，导致请求扩展准备阶段直接抛错。本插件与该问题无关。
+
+**临时规避（可逆）**：在 profile 的用户 patch 层追加一条配置覆盖，然后重启 DSH：
+
+```yaml
+# 追加到 ~/.dsh/profiles/desktop/cordis.patch.yml
+- id: plugin-package-inventory-deepseek
+  config:
+    enabled: false
+```
+
+这只关闭附带在 official 请求上的 `dsh_plugin_packages` 元数据，不影响模型功能。DSH 上游修复解析后，删除该覆盖即可恢复。
+
+**定位方法（供参考）**：临时挂一个 host 插件包装 `ctx.deepseekLlmApiExtensions.prepare`，捕获失败后逐个调用已注册的 provider 并记录 cause，即可看到真正抛错的 provider 与包名。
+
 ## 开发
 
 ```bash
