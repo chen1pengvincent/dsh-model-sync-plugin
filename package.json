@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-sync",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "description": "DSH 模型插件：监控各服务商上游 /models，列出新增模型并勾选添加（检查只读、显式应用、不自动删除）。Monitor provider model catalogs and add newly released models to DeepSeek Harness.",
   "type": "module",
@@ -34,6 +34,46 @@
     },
     "bundle": {
       "patch": "./cordis.patch.yml"
+    }
+  },
+  "dshWorkshop": {
+    "schema": "omdsh-workshop-package/v1",
+    "type": "plugin",
+    "integration": {
+      "protocol": "harness-profile",
+      "artifact": "cordis.patch.yml"
+    },
+    "install": {
+      "mode": "transactional",
+      "adapter": "profile-bundle",
+      "failurePolicy": "generation-rollback",
+      "touchesCurrentBeforeActivation": false
+    },
+    "lifecycle": {
+      "activation": "restart-profile",
+      "dispose": "supported"
+    },
+    "permissions": [
+      "settings:read",
+      "settings:write",
+      "credentials:read",
+      "network:outbound",
+      "native-code:none"
+    ],
+    "compatibility": {
+      "dshVersions": ["0.1.2-rc.1"]
+    },
+    "capability": {
+      "id": "model-sync",
+      "kind": "command",
+      "invocation": "/model-sync check",
+      "expected": "returns a read-only per-provider list of newly advertised models and protocol-repair counts, without writing settings"
+    },
+    "evidence": {
+      "install": "docs/ecosystem.md",
+      "failureIsolation": "docs/ecosystem.md",
+      "hotReload": "docs/ecosystem.md",
+      "remove": "docs/ecosystem.md"
     }
   }
 }

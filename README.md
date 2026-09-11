@@ -7,6 +7,7 @@
 - **检查更新**：启动后自动检查一次（只读），也可在面板手动触发
 - **勾选添加**：按 provider 列出上游新模型（默认全选、可取消），点「添加所选」写入 DSH settings
 - **默认收起**：新模型列表默认折叠，只有点击展开后才显示搜索与勾选框，长列表不再干扰界面
+- **命令**：会话内运行 `/model-sync check` 只读检查并输出各 provider 新模型数量；`/model-sync status` 查看上次结果
 - **搜索/筛选**：支持按模型 id 或名称过滤，`全选 / 清空` 只作用于当前筛选结果
 - **纳管开关**：每个 provider 可随时「纳入检查」或关闭
 - **多协议自动安置**：混合协议的 provider（如 OpenCode Go）会自动拆分为主路由 + 按协议的合成路由（Anthropic / Responses）
@@ -53,6 +54,13 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 
 多协议模型会自动落到对应路由；若某个新模型无法判定协议，会显示在「跳过」中，不会被错误添加。
 
+命令行（只读，不写 settings）：
+
+```text
+/model-sync check    # 重新检查并按 provider 输出新增数量
+/model-sync status   # 查看上次检查/添加结果
+```
+
 ## 安全设计
 
 - 检查阶段**只读**：不写 settings、不碰凭证
@@ -89,6 +97,13 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 这只关闭附带在 official 请求上的 `dsh_plugin_packages` 元数据，不影响模型功能。DSH 上游修复解析后，删除该覆盖即可恢复。
 
 **定位方法（供参考）**：临时挂一个 host 插件包装 `ctx.deepseekLlmApiExtensions.prepare`，捕获失败后逐个调用已注册的 provider 并记录 cause，即可看到真正抛错的 provider 与包名。
+
+## 生态收录
+
+- 仓库 topics 含 `dsh-plugin`，会被 dshfind、dsh-market 等社区目录自动索引（收录要求：可用 `dsh plugin add` 安装且声明 `dsh.bundle`）
+- 本包声明 `package.json#dshWorkshop`（`omdsh-workshop-package/v1`），面向 OMDSH Hub（hub.omdsh.dev）的入库与验证；验证证据见 [`docs/ecosystem.md`](docs/ecosystem.md)
+- 声明的可验证能力：命令 `/model-sync check`（只读，不写 settings）
+- 兼容基线：DSH kernel `0.1.2-rc.1`（DSH Desktop 2.0.6）
 
 ## 开发
 
