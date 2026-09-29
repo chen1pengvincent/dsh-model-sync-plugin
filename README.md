@@ -43,6 +43,8 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 安装后**重启 DSH**（插件是启动期加载）。若 `dsh` 提示找不到 pnpm，请先让 pnpm 进入 PATH。
 
 > 安装后请确认 profile 的 `package.json` 里 `dsh.profile.bundles` 已包含 `dsh-model-sync`；若没有，手动加入该条目再重启（bundle 层才会带上插件的客户端面板）。
+>
+> 注意：这里的 `dsh.profile.bundles` 位于 DSH profile 目录（如 `~/.dsh/profiles/desktop/`）下由 DSH 生成的 `package.json`，由 `dsh plugin add` 管理，**不是**本仓库的 `package.json`。
 
 ## 使用
 
