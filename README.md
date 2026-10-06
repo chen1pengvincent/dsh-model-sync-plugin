@@ -11,6 +11,7 @@
 - **搜索/筛选**：支持按模型 id 或名称过滤，`全选 / 清空` 只作用于当前筛选结果
 - **纳管开关**：每个 provider 可随时「纳入检查」或关闭
 - **多协议自动安置**：混合协议的 provider（如 OpenCode Go）会自动拆分为主路由 + 按协议的合成路由（Anthropic / Responses）
+- **OpenCode 会话头自动附带**：为 OpenCode / OpenCode Go 路由在请求时附带 `x-opencode-session`（按会话，无需改 settings）
 - **下架仅提示**：上游不再提供的模型只提示，不删除
 - **写前备份**：每次写入前备份 `settings.yaml`（保留最近 20 份）
 
@@ -71,6 +72,44 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 - 同一 provider 的合成路由若与已有同名 provider 冲突，会跳过以免误覆盖
 - 凭证不落盘、不打印
 
+## OpenCode Go 的 `x-opencode-session`
+
+自 2026-09-05 起，OpenCode / OpenCode Go 要求每个推理请求携带一个**按会话稳定**的
+`x-opencode-session`，否则返回 `400 MissingSessionID`。DSH 安装的 pi-ai 适配器
+（`@earendil-works/pi-ai@0.85.1`）不会发送这个头，而本插件为未收录模型写入的
+`opencode-go` 路由带显式 `api:`，即使将来 pi-ai 内置了包装器也**覆盖不到**这条路径。
+
+本插件在**请求时**补上这个头，不写 settings：
+
+- 在 `llm/stream` 瀑布上取到本次请求的 `provider` 与 `sessionId`（会话循环为每个请求盖上
+  的持久会话 id）；
+- 仅当 provider 命中 OpenCode 前缀（默认 `opencode-go` / `opencode`，含
+  `opencode-go-responses`、`opencode-go-messages` 等合成路由）且主机属于 OpenCode
+  （从 settings 路由的 `baseURL` 与内置端点推导）时介入；
+- 通过 `AsyncLocalStorage` 包裹下游分片流，并临时给 `globalThis.fetch` 打补丁，因此
+  chat-completions / responses / anthropic-messages 三种协议一次覆盖；
+- 默认值为**每个 DSH 会话一个随机 UUID**（不把内部会话 id 泄露给第三方），同一会话内稳定，
+  切换会话即更换，避免把全部会话压进同一个亲和桶导致命中率下降；若调用方已设置该头，则不覆盖。
+
+### 配置（可选）
+
+在 profile 的 `cordis.patch.yml` 里按 id 覆盖本插件行即可（默认开启，无需配置）：
+
+```yaml
+- id: dsh-model-sync
+  config:
+    sessionHeader:
+      mode: uuid          # uuid（默认，不透明）| session-id（发送真实会话 id，仅在需要时开启）
+      providers: [opencode-go, opencode]   # 前缀匹配，默认即此
+      enabled: true       # 设为 false 可整体关闭
+```
+
+`sessionHeader: false` 等价于 `enabled: false`。
+
+> 说明：这与在 settings 的 provider 上写一个固定 `headers.x-opencode-session` 不同——固定值会让
+> 上游把**所有**会话路由到同一副本，切换会话时前缀缓存失效、费用与延迟上升（社区已有实测）。本插件
+> 的做法是按会话取值，正是网关所要求的语义。
+
 ## 数据与状态
 
 | 路径 | 说明 |
@@ -110,11 +149,11 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 ## 开发
 
 ```bash
-node --test tests/          # 单元测试（引擎 + 控制器）
+node --test                 # 单元测试（引擎 + 控制器 + 会话头）
 node scripts/dry-run.mjs    # 真实上游 dry-run：读本机凭证，只读不写
 ```
 
-依赖 DSH kernel 的公开 seam：`ctx.settings`、`ctx.credentials`、`ctx.webServer`、客户端 `slots`。当前适配内核 `0.1.2-rc.1`（DSH Desktop 2.0.6）。
+依赖 DSH kernel 的公开 seam：`ctx.settings`、`ctx.credentials`、`ctx.webServer`、`llm/stream` 瀑布、客户端 `slots`。会话头半仅使用 `llm/stream` 与 `globalThis.fetch`，不依赖内核内部符号。当前适配内核 `0.1.2-rc.1`（DSH Desktop 2.0.6）。
 
 ## 卸载
 
