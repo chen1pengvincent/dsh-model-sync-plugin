@@ -83,6 +83,16 @@ test('detectRouteRepairs moves misplaced models back without touching correct on
   assert.deepEqual(repairs.map((repair) => [repair.id, repair.from, repair.to]), [['minimax-m3', 'opencode-go', 'opencode-go-messages']]);
 });
 
+test('planRouteChanges writes route api+baseURL on single-protocol routes too', () => {
+  const route = BUILTIN_ROUTES.openrouter;
+  const profiles = { openrouter: { apiKeyEnv: 'OPENROUTER_API_KEY', models: [] } };
+  const additions = [{ id: 'anthropic/claude-opus-5-fast', api: 'openai-completions', target: 'openrouter', entry: { id: 'anthropic/claude-opus-5-fast', name: 'Claude Opus 5 (Fast)' } }];
+  const planned = planRouteChanges(route, profiles, { additions, repairs: [] }, 'OPENROUTER_API_KEY');
+  assert.ok(planned.operations.some((op) => op.op === 'set' && op.path.join('.') === 'providers.openrouter.api' && op.value === 'openai-completions'));
+  assert.ok(planned.operations.some((op) => op.op === 'set' && op.path.join('.') === 'providers.openrouter.baseURL' && op.value === 'https://openrouter.ai/api/v1'));
+  assert.deepEqual(planned.createdSiblings, []);
+});
+
 test('planRouteChanges appends selected additions and creates siblings', () => {
   const profiles = { 'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY', models: [{ id: 'kimi-k3', name: 'Kimi K3' }] } };
   const additions = [

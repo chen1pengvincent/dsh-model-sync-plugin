@@ -20,7 +20,7 @@ function applyOps(root, ops) {
   }
 }
 
-function makeHarness({ modelList, extraProviders = false }) {
+function makeHarness({ modelList, extraProviders = false, credentialDescription = { configured: true, source: 'file', writable: true } }) {
   const dir = mkdtempSync(join(tmpdir(), 'model-sync-test-'));
   const state = new SyncState(dir);
   const providers = {
@@ -46,7 +46,7 @@ function makeHarness({ modelList, extraProviders = false }) {
   const ctx = {
     get(name) {
       if (name === 'settings') return settings;
-      if (name === 'credentials') return { resolve: async () => ({ value: 'test-key' }) };
+      if (name === 'credentials') return { resolve: async () => ({ value: 'test-key' }), describe: async () => credentialDescription };
       return undefined;
     },
     logger: { info() {}, warn() {}, error() {} },
@@ -140,7 +140,7 @@ test('openrouter lists but preselects nothing; kimi is preselected; managed togg
     const profile = harness.document['llm-pi-ai'].providers.openrouter;
     assert.deepEqual(profile.models.map((model) => model.id), ['x/one']);
     assert.equal(profile.baseURL, 'https://openrouter.ai/api/v1');
-    assert.equal(profile.api, undefined, 'single-protocol routes do not need a forced api');
+    assert.equal(profile.api, 'openai-completions', 'route api is required for models the installed catalog does not describe');
   } finally {
     harness.cleanup();
   }
@@ -202,6 +202,51 @@ test('startup never auto-applies additions', async () => {
     await harness.controller.startup();
     assert.equal(harness.mutations.length, 0, 'new models are only listed, never auto-added');
     assert.deepEqual(harness.document['llm-pi-ai'].providers['opencode-go'].models.map((model) => model.id), ['kimi-k3']);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('env-shadowed credential surfaces a warning in check results and persisted state', async () => {
+  const harness = makeHarness({
+    modelList: FULL_LIST,
+    credentialDescription: { configured: true, source: 'env', writable: false },
+  });
+  try {
+    const payload = await harness.controller.check();
+    const row = payload.results.find((result) => result.provider === 'opencode-go');
+    assert.equal(row.credential.configured, true);
+    assert.equal(row.credential.source, 'env');
+    assert.equal(row.credential.shadowed, true);
+    assert.match(row.credential.warning, /launchctl unsetenv OPENCODE_GO_API_KEY/);
+    const persisted = harness.state.data.lastCheck.results.find((result) => result.provider === 'opencode-go');
+    assert.equal(persisted.credential.shadowed, true, 'credential fact survives into the persisted display copy');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('writable file credential reports configured and not shadowed', async () => {
+  const harness = makeHarness({ modelList: FULL_LIST });
+  try {
+    const payload = await harness.controller.check();
+    const row = payload.results.find((result) => result.provider === 'opencode-go');
+    assert.equal(row.credential.configured, true);
+    assert.equal(row.credential.shadowed, false);
+    assert.equal(row.credential.warning, undefined);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('absent credentials describe leaves results without a credential fact', async () => {
+  const harness = makeHarness({ modelList: FULL_LIST });
+  const realGet = harness.controller.ctx.get.bind(harness.controller.ctx);
+  harness.controller.ctx.get = (name) => (name === 'credentials' ? { resolve: async () => ({ value: 'test-key' }) } : realGet(name));
+  try {
+    const payload = await harness.controller.check();
+    const row = payload.results.find((result) => result.provider === 'opencode-go');
+    assert.equal(row.credential, undefined, 'older kernels without describe() are tolerated');
   } finally {
     harness.cleanup();
   }

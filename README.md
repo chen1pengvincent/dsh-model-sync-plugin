@@ -120,6 +120,16 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 
 ## 已知问题与排查
 
+### API Key 在设置页只读、无法更改（凭证被启动环境变量遮蔽）
+
+**现象**：设置 → 模型 中某 provider 的 Key 输入框不可编辑，或保存后实际请求仍用旧 Key。
+
+**原因**：同名环境变量（如 `OPENCODE_GO_API_KEY`）存在于 DSH 进程的启动环境中（典型来源：`launchctl setenv` 写进了 launchd 用户域）。DSH 凭证解析优先级为「进程环境 > 凭证文件 > .env」，且环境来源的凭证被刻意设计为只读——防止「你以为改了、实际被遮蔽」。注意：DSH 的「应用内重启」（Electron relaunch）会继承旧进程环境，只有 ⌘Q 完全退出后从 Dock/访达冷启动才会重新读取 launchd 环境。
+
+**修复**：`launchctl unsetenv <变量名>`（或从 shell 配置文件中移除 export），然后 ⌘Q 完全退出并冷启动 DSH，之后设置页即可编辑。
+
+**本插件的检测（v0.5.0+）**：`check` 对每个纳管路由调用 `credentials.describe`（只读元数据，不读取值），发现凭证被环境遮蔽（`writable: false`）时，在设置面板对应卡片上显示醒目警告，并在 `/model-sync check` / `status` 输出中给出 ⚠️ 行与修复步骤。插件只检测和指引，不替用户修改系统环境。
+
 ### DSH Desktop 2.0.6：official 路由报 `DeepSeek request extension preparation failed`
 
 **现象**：使用 `deepseek-official`（例如 V4.1 Flash）时，任何请求（包括自动标题生成）都失败，错误为 `DeepSeek request extension preparation failed`；opencode-go / openrouter 等 pi-ai 路由不受影响。

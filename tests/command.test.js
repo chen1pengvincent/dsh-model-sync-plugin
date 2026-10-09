@@ -79,3 +79,22 @@ test('command handler reports usage and wraps failures', async () => {
   assert.equal(failed.kind, 'error');
   assert.match(failed.text, /网络|network down/);
 });
+
+test('shadowed credential renders a warning line under its provider', () => {
+  const payload = {
+    at: Date.now(),
+    results: [
+      {
+        provider: 'opencode-go',
+        status: 'ok',
+        newItems: [],
+        credential: { ref: 'OPENCODE_GO_API_KEY', configured: true, source: 'env', writable: false, shadowed: true, warning: '凭证 OPENCODE_GO_API_KEY 由启动环境变量注入：只读。' },
+      },
+    ],
+  };
+  const text = formatCheckReport(payload);
+  assert.match(text, /OpenCode Go：无新增/);
+  assert.match(text, /⚠️ 凭证 OPENCODE_GO_API_KEY 由启动环境变量注入/);
+  const statusText = formatStatus({ lastCheck: payload });
+  assert.match(statusText, /⚠️ 凭证 OPENCODE_GO_API_KEY/, 'warning also renders from cached status');
+});
