@@ -20,7 +20,7 @@ function applyOps(root, ops) {
   }
 }
 
-function makeHarness({ modelList, extraProviders = false, credentialDescription = { configured: true, source: 'file', writable: true } }) {
+function makeHarness({ modelList, extraProviders = false, credentialDescription = { configured: true, source: 'file', writable: true }, settingsShape = 'get' }) {
   const dir = mkdtempSync(join(tmpdir(), 'model-sync-test-'));
   const state = new SyncState(dir);
   const providers = {
@@ -35,14 +35,18 @@ function makeHarness({ modelList, extraProviders = false, credentialDescription 
     'llm-pi-ai': { providers },
   };
   const mutations = [];
-  const settings = {
-    get: (ns) => structuredClone(document[ns]),
-    mutate: async (ns, ops) => {
-      if (document[ns] === undefined) throw new Error(`settings namespace "${ns}" is not registered`);
-      mutations.push({ ns, ops });
-      applyOps(document[ns], ops);
-    },
+  const mutate = async (ns, ops) => {
+    if (document[ns] === undefined) throw new Error(`settings namespace "${ns}" is not registered`);
+    mutations.push({ ns, ops });
+    applyOps(document[ns], ops);
   };
+  const settings = settingsShape === 'describe'
+    ? {
+        // Entry-based SettingsForms (DSH Desktop 2.0.17+): no get(); reads go through describe().
+        describe: () => Object.entries(document).map(([ns, value]) => ({ ns, value: structuredClone(value) })),
+        mutate,
+      }
+    : { get: (ns) => structuredClone(document[ns]), mutate };
   const ctx = {
     get(name) {
       if (name === 'settings') return settings;
@@ -247,6 +251,31 @@ test('absent credentials describe leaves results without a credential fact', asy
     const payload = await harness.controller.check();
     const row = payload.results.find((result) => result.provider === 'opencode-go');
     assert.equal(row.credential, undefined, 'older kernels without describe() are tolerated');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('reads settings through describe() on entry-based kernels (2.0.17+)', async () => {
+  const harness = makeHarness({ modelList: FULL_LIST, settingsShape: 'describe' });
+  try {
+    const payload = await harness.controller.check();
+    const byProvider = Object.fromEntries(payload.results.map((result) => [result.provider, result]));
+    assert.equal(byProvider['opencode-go']?.status, 'ok', 'pi-ai route read through describe');
+    assert.equal(byProvider['deepseek-official']?.status, 'ok', 'deepseek section read through describe');
+    assert.equal(byProvider['opencode-go'].credential?.configured, true, 'credential facts still attach');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('describe-shaped settings still apply additions through mutate', async () => {
+  const harness = makeHarness({ modelList: FULL_LIST, settingsShape: 'describe' });
+  try {
+    const outcome = await harness.controller.applySelection({ 'opencode-go': ['minimax-m3'] });
+    assert.deepEqual(outcome.errors, []);
+    const providers = harness.document['llm-pi-ai'].providers;
+    assert.ok(providers['opencode-go-messages']?.models.some((model) => model.id === 'minimax-m3'), 'sibling created via mutate');
   } finally {
     harness.cleanup();
   }

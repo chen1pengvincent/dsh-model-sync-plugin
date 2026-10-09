@@ -154,7 +154,7 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 - 仓库 topics 含 `dsh-plugin`，会被 dshfind、dsh-market 等社区目录自动索引（收录要求：可用 `dsh plugin add` 安装且声明 `dsh.bundle`）
 - 本包声明 `package.json#dshWorkshop`（`omdsh-workshop-package/v1`），面向 OMDSH Hub（hub.omdsh.dev）的入库与验证；验证证据见 [`docs/ecosystem.md`](docs/ecosystem.md)
 - 声明的可验证能力：命令 `/model-sync check`（只读，不写 settings）
-- 兼容基线：DSH kernel `0.1.2-rc.1`（DSH Desktop 2.0.6）
+- 兼容基线：DSH kernel `0.1.2-rc.1`（DSH Desktop 2.0.6）与 `0.2.0-rc.2`（DSH Desktop 2.0.17；该版把 settings.yaml 迁移为条目式 Config，旧的 `settings.get(ns)` 读取形态不存在了，v0.5.1 起两种形态都支持——低于 v0.5.1 的版本在 2.0.17 上会把全部路由误报为「未纳入检查」）
 
 ## 开发
 
