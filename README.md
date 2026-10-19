@@ -10,7 +10,8 @@
 - **命令**：会话内运行 `/model-sync check` 只读检查并输出各 provider 新模型数量；`/model-sync status` 查看上次结果
 - **搜索/筛选**：支持按模型 id 或名称过滤，`全选 / 清空` 只作用于当前筛选结果
 - **纳管开关**：每个 provider 可随时「纳入检查」或关闭
-- **多协议自动安置**：混合协议的 provider（如 OpenCode Go）会自动拆分为主路由 + 按协议的合成路由（Anthropic / Responses）
+- **多协议自动安置**：混合协议的 provider（如 OpenCode Go、OpenCode Console）会自动拆分为主路由 + 按协议的合成路由（Chat / Anthropic / Responses）
+- **Sibling-only 安全写入（OpenCode Console）**：`opencode` 主行是内置目录模型的落点，任何新模型只写入 `opencode-chat` / `opencode-messages` / `opencode-responses` 合成路由，主行的 `models` / `api` / `baseURL` 永不被改写
 - **OpenCode 会话头自动附带**：为 OpenCode / OpenCode Go 路由在请求时附带 `x-opencode-session`（按会话，无需改 settings）
 - **下架仅提示**：上游不再提供的模型只提示，不删除
 - **写前备份**：每次写入前备份 `settings.yaml`（保留最近 20 份）
@@ -21,10 +22,20 @@
 |---|---|---|
 | `deepseek-official` | `api.deepseek.com/models` | 纳管、默认全选 |
 | `opencode-go` | `opencode.ai/zen/go/v1/models` | 纳管、默认全选 |
+| `opencode` | `opencode.ai/zen/v1/models`（回退 `opencode.ai/inference/v1/models`） | 纳管、**默认不勾选**（本机账号可见 37 模型）；新模型只写入合成路由 |
 | `kimi-coding` | `api.kimi.com/coding/v1/models` | 纳管、默认全选 |
 | `openrouter` | `openrouter.ai/api/v1/models` | 纳管、**默认不勾选**（上游 400+ 模型） |
 
 未配置的 provider 会自动跳过；未知 provider 显示为「未纳管」。
+
+### `opencode`（OpenCode Console / zen）的协议分类
+
+> 端点带凭据时返回「账号可见」列表（本机 37 个；未认证的公开目录为 85 个），插件按带凭据结果检查。
+
+- **models.dev 优先**：`claude-*`（Anthropic）、`gpt-*` / `grok-*` / `muse-*`（Responses）、`deepseek-*` / `glm-*` / `kimi-*` / `minimax-*` / `qwen3.8-max` 等（Chat Completions）
+- **静态家族规则**（models.dev 无记录时兜底）：`^claude` → Anthropic Messages（如 `claude-opus-5-5-backup`）；`^mistral` → Chat Completions（models.dev 将其标为 `@ai-sdk/mistral`，实际走 OpenAI 兼容端点）
+- **跳过**：`gemini-*`（google-generative-ai，手写路由不支持，但内置目录已可选用）、`jev-*`（TypeSafe System One 结构化 API，非聊天协议）、`test`（内部测试 id）
+- `claude-*` 5.x 模型写入 sibling 时会带 `forceAdaptiveThinking: true, supportsTemperature: false`；`deepseek*` 带 `requiresReasoningContentOnAssistantMessages: true`（与官方目录一致）
 
 ## 安装
 
@@ -149,6 +160,14 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 
 **定位方法（供参考）**：临时挂一个 host 插件包装 `ctx.deepseekLlmApiExtensions.prepare`，捕获失败后逐个调用已注册的 provider 并记录 cause，即可看到真正抛错的 provider 与包名。
 
+### OpenCode 免费模型在 DSH 内调用返回 403（上游策略，非插件问题）
+
+**现象**：通过 `opencode` 路由调用上游任何 `*-free` 模型（如 `deepseek-v4.1-flash-free`、`glm-5.3-flash-free`），返回 403 `FreeTierError`：「OpenCode's free tier can only be used from within OpenCode」。
+
+**原因**：OpenCode 上游对免费模型的服务器端策略——免费额度仅限官方 OpenCode 客户端使用；与凭证类型、DSH 端会话头（插件已按会话为路由附带 `x-opencode-session`）无关。付费/常规模型不受影响。
+
+**处理**：插件仍会正确列出并允许添加免费模型，但调用会被上游拒绝——请以付费模型为准。实测时间 2026-10-19（qwen3.8-max、mistral-large-4、claude-haiku-5-5 均正常 200）。
+
 ## 生态收录
 
 - 仓库 topics 含 `dsh-plugin`，会被 dshfind、dsh-market 等社区目录自动索引（收录要求：可用 `dsh plugin add` 安装且声明 `dsh.bundle`）
@@ -163,7 +182,7 @@ node --test                 # 单元测试（引擎 + 控制器 + 会话头）
 node scripts/dry-run.mjs    # 真实上游 dry-run：读本机凭证，只读不写
 ```
 
-依赖 DSH kernel 的公开 seam：`ctx.settings`、`ctx.credentials`、`ctx.webServer`、`llm/stream` 瀑布、客户端 `slots`。会话头半仅使用 `llm/stream` 与 `globalThis.fetch`，不依赖内核内部符号。当前适配内核 `0.1.2-rc.1`（DSH Desktop 2.0.6）。
+依赖 DSH kernel 的公开 seam：`ctx.settings`、`ctx.credentials`、`ctx.webServer`、`llm/stream` 瀑布、客户端 `slots`。会话头半仅使用 `llm/stream` 与 `globalThis.fetch`，不依赖内核内部符号。当前适配内核 `0.2.0-rc.2`（DSH Desktop 2.0.17），兼容 `0.1.2-rc.1`（DSH Desktop 2.0.6）。
 
 ## 卸载
 

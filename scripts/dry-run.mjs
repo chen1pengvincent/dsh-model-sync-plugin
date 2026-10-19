@@ -45,6 +45,12 @@ const document = {
         // Mirrors the current collapsed state: every advertised model on one route.
         models: [],
       },
+      // Mirrors a typical OpenCode Console setup: catalog-covered models in settings.
+      opencode: {
+        displayName: 'OpenCode',
+        apiKeyEnv: 'OPENCODE_API_KEY',
+        models: [{ id: 'claude-opus-5-5' }, { id: 'mimo-v2.6-flash-free' }],
+      },
       openrouter: { displayName: 'OpenRouter', apiKeyEnv: 'OPENROUTER_API_KEY', models: [] },
       'kimi-coding': { displayName: 'Kimi Coding', apiKeyEnv: 'KIMI_CODING_API_KEY', models: [] },
     },

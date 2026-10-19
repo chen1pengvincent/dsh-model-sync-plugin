@@ -20,11 +20,15 @@ function applyOps(root, ops) {
   }
 }
 
-function makeHarness({ modelList, extraProviders = false, credentialDescription = { configured: true, source: 'file', writable: true }, settingsShape = 'get' }) {
+function makeHarness({ modelList, opencodeList = ['claude-opus-5-5', 'mimo-v2.6-flash-free'], extraProviders = false, credentialDescription = { configured: true, source: 'file', writable: true }, settingsShape = 'get' }) {
   const dir = mkdtempSync(join(tmpdir(), 'model-sync-test-'));
   const state = new SyncState(dir);
   const providers = {
     'opencode-go': { displayName: 'OpenCode Go', apiKeyEnv: 'OPENCODE_GO_API_KEY', models: [{ id: 'kimi-k3', name: 'Kimi K3' }] },
+    opencode: {
+      apiKeyEnv: 'OPENCODE_API_KEY',
+      models: [{ id: 'claude-opus-5-5', name: 'Claude Opus 5.5' }, { id: 'mimo-v2.6-flash-free', name: 'MiMo-V2.6-Flash Free' }],
+    },
   };
   if (extraProviders) {
     providers.openrouter = { displayName: 'OpenRouter', apiKeyEnv: 'OPENROUTER_API_KEY', models: [] };
@@ -69,6 +73,14 @@ function makeHarness({ modelList, extraProviders = false, credentialDescription 
               'gpt-5.6-luna': { provider: { npm: '@ai-sdk/openai' } },
             },
           },
+          opencode: {
+            npm: '@ai-sdk/openai-compatible',
+            models: {
+              'qwen3.8-max': {},
+              'claude-haiku-5-5': { provider: { npm: '@ai-sdk/anthropic' } },
+              'gemini-4-argon': { provider: { npm: '@ai-sdk/google' } },
+            },
+          },
         }),
       };
     }
@@ -77,6 +89,9 @@ function makeHarness({ modelList, extraProviders = false, credentialDescription 
     }
     if (String(url).startsWith('https://opencode.ai/zen/go/v1/models')) {
       return { ok: true, json: async () => ({ data: modelList.map((id) => ({ id })) }) };
+    }
+    if (String(url).startsWith('https://opencode.ai/zen/v1/models')) {
+      return { ok: true, json: async () => ({ data: opencodeList.map((id) => ({ id })) }) };
     }
     if (String(url).startsWith('https://openrouter.ai/api/v1/models')) {
       return { ok: true, json: async () => ({ data: [{ id: 'x/one' }, { id: 'y/two' }] }) };
@@ -264,6 +279,47 @@ test('reads settings through describe() on entry-based kernels (2.0.17+)', async
     assert.equal(byProvider['opencode-go']?.status, 'ok', 'pi-ai route read through describe');
     assert.equal(byProvider['deepseek-official']?.status, 'ok', 'deepseek section read through describe');
     assert.equal(byProvider['opencode-go'].credential?.configured, true, 'credential facts still attach');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('opencode: candidates land on siblings and apply never touches the catalog row', async () => {
+  const opencodeList = ['claude-opus-5-5', 'mimo-v2.6-flash-free', 'claude-haiku-5-5', 'qwen3.8-max', 'gemini-4-argon', 'claude-opus-5-5-backup'];
+  const harness = makeHarness({ modelList: FULL_LIST, opencodeList });
+  try {
+    const payload = await harness.controller.check();
+    const opencode = payload.results.find((result) => result.provider === 'opencode');
+    assert.equal(opencode.status, 'ok');
+    assert.equal(opencode.defaultSelected, false);
+    assert.deepEqual(opencode.newItems.map((item) => [item.id, item.target]), [
+      ['claude-haiku-5-5', 'opencode-messages'],
+      ['qwen3.8-max', 'opencode-chat'],
+      ['claude-opus-5-5-backup', 'opencode-messages'],
+    ]);
+    assert.deepEqual(opencode.skipped.map((entry) => entry.id), ['gemini-4-argon']);
+
+    const outcome = await harness.controller.applySelection({ opencode: ['claude-haiku-5-5', 'qwen3.8-max'] });
+    assert.deepEqual(outcome.errors, []);
+    const providers = harness.document['llm-pi-ai'].providers;
+    assert.deepEqual(providers.opencode.models.map((model) => model.id), ['claude-opus-5-5', 'mimo-v2.6-flash-free'], 'catalog row models are never rewritten');
+    assert.equal(providers.opencode.api, undefined, 'no route-level api is written');
+    assert.equal(providers.opencode.baseURL, undefined, 'no route-level baseURL is written');
+    assert.ok(
+      !harness.mutations.some((mutation) => mutation.ops.some((op) => op.path[0] === 'providers' && op.path[1] === 'opencode')),
+      'no mutation touches the opencode catalog row',
+    );
+    assert.deepEqual(providers['opencode-messages'].models.map((model) => model.id), ['claude-haiku-5-5']);
+    assert.equal(providers['opencode-messages'].api, 'anthropic-messages');
+    assert.equal(providers['opencode-messages'].baseURL, 'https://opencode.ai/zen');
+    assert.equal(providers['opencode-messages'].apiKeyEnv, 'OPENCODE_API_KEY');
+    assert.deepEqual(providers['opencode-chat'].models.map((model) => model.id), ['qwen3.8-max']);
+    assert.equal(providers['opencode-chat'].baseURL, 'https://opencode.ai/zen/v1');
+    assert.deepEqual(harness.state.knownSiblings('opencode').sort(), ['opencode-chat', 'opencode-messages']);
+
+    const before = harness.mutations.length;
+    await harness.controller.applySelection({}, { repairs: true });
+    assert.equal(harness.mutations.length, before, 'repair pass leaves everything alone');
   } finally {
     harness.cleanup();
   }

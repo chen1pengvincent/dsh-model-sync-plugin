@@ -4,9 +4,12 @@ import assert from 'node:assert/strict';
 import {
   buildDeepseekEntry,
   buildModelsDevIndex,
+  buildPiAiEntry,
   classifyProtocol,
   detectRouteRepairs,
   detectRouteUpdates,
+  expectedSiblingNames,
+  modelsDevMeta,
   modelsUrl,
   parseListing,
   planDeepseekAdditions,
@@ -21,6 +24,7 @@ import { BUILTIN_ROUTES } from '../lib/routes.js';
 
 const ROUTE = BUILTIN_ROUTES['opencode-go'];
 const DEEPSEEK_ROUTE = BUILTIN_ROUTES['deepseek-official'];
+const OPENCODE_ROUTE = BUILTIN_ROUTES.opencode;
 
 const INDEX = buildModelsDevIndex({
   'opencode-go': {
@@ -154,4 +158,105 @@ test('planRouteChanges leaves an unrelated same-name provider alone', () => {
 
 test('stableStringify ignores key order', () => {
   assert.equal(stableStringify({ a: 1, b: [2, 3] }), stableStringify({ b: [2, 3], a: 1 }));
+});
+
+const OPENCODE_INDEX = buildModelsDevIndex({
+  opencode: {
+    npm: '@ai-sdk/openai-compatible',
+    models: {
+      'qwen3.8-max': {},
+      'claude-haiku-5-5': { provider: { npm: '@ai-sdk/anthropic' }, reasoning: true },
+      'gemini-4-argon': { provider: { npm: '@ai-sdk/google' } },
+      'mistral-large-4': { provider: { npm: '@ai-sdk/mistral' } },
+    },
+  },
+});
+
+test('opencode route is siblingOnly: even the primary protocol targets a sibling', () => {
+  assert.equal(targetProvider(OPENCODE_ROUTE, 'openai-completions'), 'opencode-chat');
+  assert.equal(targetProvider(OPENCODE_ROUTE, 'anthropic-messages'), 'opencode-messages');
+  assert.equal(targetProvider(OPENCODE_ROUTE, 'openai-responses'), 'opencode-responses');
+  assert.deepEqual(expectedSiblingNames(OPENCODE_ROUTE), ['opencode-chat', 'opencode-messages', 'opencode-responses']);
+});
+
+test('classifyProtocol: models.dev first, then curated family rules', () => {
+  assert.deepEqual(classifyProtocol(OPENCODE_ROUTE, 'qwen3.8-max', OPENCODE_INDEX), { api: 'openai-completions', source: 'models.dev' });
+  assert.deepEqual(classifyProtocol(OPENCODE_ROUTE, 'claude-haiku-5-5', OPENCODE_INDEX), { api: 'anthropic-messages', source: 'models.dev' });
+  assert.deepEqual(classifyProtocol(OPENCODE_ROUTE, 'claude-opus-5-5-backup', OPENCODE_INDEX), { api: 'anthropic-messages', source: 'route-rule' });
+  assert.deepEqual(classifyProtocol(OPENCODE_ROUTE, 'mistral-large-4', OPENCODE_INDEX), { api: 'openai-completions', source: 'route-rule' });
+  assert.deepEqual(classifyProtocol(OPENCODE_ROUTE, 'gemini-4-argon', OPENCODE_INDEX), { api: undefined, source: 'unknown' });
+  assert.deepEqual(classifyProtocol(OPENCODE_ROUTE, 'test', buildModelsDevIndex({})), { api: undefined, source: 'no-metadata' });
+  assert.deepEqual(classifyProtocol(OPENCODE_ROUTE, 'claude-opus-5-5-backup', buildModelsDevIndex({})), { api: 'anthropic-messages', source: 'route-rule' });
+});
+
+test('detectRouteUpdates on opencode places additions on siblings and skips unmappable ids', () => {
+  const profiles = { opencode: { models: [{ id: 'claude-opus-5-5' }, { id: 'mimo-v2.6-flash-free' }] } };
+  const discovered = [
+    { id: 'claude-opus-5-5' },
+    { id: 'mimo-v2.6-flash-free' },
+    { id: 'claude-opus-5-5-backup' },
+    { id: 'qwen3.8-max' },
+    { id: 'mistral-large-4' },
+    { id: 'gemini-4-argon' },
+    { id: 'test' },
+  ];
+  const updates = detectRouteUpdates(OPENCODE_ROUTE, discovered, profiles, OPENCODE_INDEX);
+  assert.deepEqual(updates.newItems.map((item) => [item.id, item.target]), [
+    ['claude-opus-5-5-backup', 'opencode-messages'],
+    ['qwen3.8-max', 'opencode-chat'],
+    ['mistral-large-4', 'opencode-chat'],
+  ]);
+  assert.deepEqual(updates.skipped.map((entry) => entry.id).sort(), ['gemini-4-argon', 'test']);
+  assert.deepEqual(updates.removed, []);
+});
+
+test('siblingOnly repairs ignore the catalog provider row and fix sibling mixups', () => {
+  const profiles = {
+    opencode: { models: [{ id: 'claude-opus-5-5' }] },
+    'opencode-messages': { models: [{ id: 'qwen3.8-max' }, { id: 'claude-haiku-5-5' }] },
+  };
+  const repairs = detectRouteRepairs(OPENCODE_ROUTE, profiles, OPENCODE_INDEX);
+  assert.deepEqual(repairs.map((repair) => [repair.id, repair.from, repair.to]), [
+    ['qwen3.8-max', 'opencode-messages', 'opencode-chat'],
+  ]);
+});
+
+test('planRouteChanges on a siblingOnly route never writes the catalog provider row', () => {
+  const profiles = { opencode: { apiKeyEnv: 'OPENCODE_API_KEY', models: [{ id: 'claude-opus-5-5' }] } };
+  const additions = [
+    {
+      id: 'claude-haiku-5-5',
+      api: 'anthropic-messages',
+      target: 'opencode-messages',
+      entry: buildPiAiEntry({ id: 'claude-haiku-5-5' }, undefined, modelsDevMeta(OPENCODE_INDEX, 'opencode', 'claude-haiku-5-5'), OPENCODE_ROUTE, 'anthropic-messages'),
+    },
+    {
+      id: 'deepseek-v4.1-flash-free',
+      api: 'openai-completions',
+      target: 'opencode-chat',
+      entry: buildPiAiEntry({ id: 'deepseek-v4.1-flash-free' }, undefined, undefined, OPENCODE_ROUTE, 'openai-completions'),
+    },
+  ];
+  const planned = planRouteChanges(OPENCODE_ROUTE, profiles, { additions, repairs: [] }, 'OPENCODE_API_KEY');
+  assert.ok(!planned.operations.some((op) => op.path.slice(0, 2).join('.') === 'providers.opencode'), 'catalog row untouched');
+  const messages = planned.operations.find((op) => op.path.join('.') === 'providers.opencode-messages');
+  assert.equal(messages.value.api, 'anthropic-messages');
+  assert.equal(messages.value.baseURL, 'https://opencode.ai/zen');
+  assert.equal(messages.value.apiKeyEnv, 'OPENCODE_API_KEY');
+  assert.deepEqual(messages.value.models[0].compat, { forceAdaptiveThinking: true, supportsTemperature: false });
+  const chat = planned.operations.find((op) => op.path.join('.') === 'providers.opencode-chat');
+  assert.equal(chat.value.baseURL, 'https://opencode.ai/zen/v1');
+  assert.deepEqual(chat.value.models[0].compat, {
+    supportsStore: false,
+    supportsDeveloperRole: false,
+    supportsStrictMode: true,
+    maxTokensField: 'max_tokens',
+    requiresReasoningContentOnAssistantMessages: true,
+  });
+  assert.deepEqual(planned.createdSiblings.sort(), ['opencode-chat', 'opencode-messages']);
+});
+
+test('claude compat rule only applies to 5.x claude models', () => {
+  const entry = buildPiAiEntry({ id: 'claude-fable-5-1' }, undefined, undefined, OPENCODE_ROUTE, 'anthropic-messages');
+  assert.deepEqual(entry, { id: 'claude-fable-5-1' });
 });

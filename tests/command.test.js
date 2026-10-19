@@ -8,6 +8,7 @@ const PAYLOAD = {
   results: [
     { provider: 'deepseek-official', status: 'ok', newItems: [] },
     { provider: 'opencode-go', status: 'ok', newItems: [{ id: 'a' }, { id: 'b' }], repairs: [{ id: 'x' }] },
+    { provider: 'opencode', status: 'ok', newItems: [{ id: 'qwen3.8-max' }], repairs: [] },
     { provider: 'openrouter', status: 'unmanaged' },
     { provider: 'kimi-coding', status: 'discovery-failed', error: 'HTTP 503' },
   ],
@@ -17,6 +18,7 @@ test('formatCheckReport summarises every route in plain language', () => {
   const text = formatCheckReport(PAYLOAD);
   assert.match(text, /DeepSeek：无新增/);
   assert.match(text, /OpenCode Go：2 个新模型，1 个协议修正项/);
+  assert.match(text, /^- OpenCode：1 个新模型$/m);
   assert.match(text, /OpenRouter：未纳入检查/);
   assert.match(text, /Kimi Coding：检查失败（HTTP 503）/);
   assert.match(text, /「添加所选」/);
