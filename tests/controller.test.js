@@ -344,9 +344,9 @@ test('managedSiblings groups live sibling models by protocol and skips empties',
     providers['opencode-messages'] = {
       displayName: 'OpenCode · Anthropic Messages',
       apiKeyEnv: 'OPENCODE_API_KEY',
-      models: [{ id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5' }],
+      models: [{ id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', contextWindow: 200000, maxTokens: 32000, input: ['text', 'image'] }],
     };
-    providers['opencode-chat'] = { displayName: 'OpenCode · Chat Completions', models: [{ id: 'qwen3.8-max' }] };
+    providers['opencode-chat'] = { displayName: 'OpenCode · Chat Completions', models: [{ id: 'qwen3.8-max', input: ['text', 'audio'] }] };
     providers['opencode-responses'] = { displayName: 'OpenCode · Responses', models: [] };
 
     const payload = harness.controller.managedSiblings();
@@ -357,8 +357,11 @@ test('managedSiblings groups live sibling models by protocol and skips empties',
       ['opencode-chat', 'openai-completions', 'Chat Completions'],
       ['opencode-messages', 'anthropic-messages', 'Anthropic Messages'],
     ], 'empty sibling is omitted and protocol order is stable');
-    assert.deepEqual(route.siblings[0].models, [{ id: 'qwen3.8-max', name: 'qwen3.8-max' }], 'missing model names fall back to ids');
+    assert.deepEqual(route.siblings[0].models, [{ id: 'qwen3.8-max', name: 'qwen3.8-max', input: ['text'] }], 'missing model names fall back to ids and unknown modalities are dropped');
     assert.equal(route.siblings[1].displayName, 'OpenCode · Anthropic Messages');
+    assert.deepEqual(route.siblings[1].models, [
+      { id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', contextWindow: 200000, maxTokens: 32000, input: ['text', 'image'] },
+    ], 'capacity and input fields travel to the managed panel');
   } finally {
     harness.cleanup();
   }

@@ -13,7 +13,7 @@
 - **多协议自动安置**：混合协议的 provider（如 OpenCode Go、OpenCode Console）会自动拆分为主路由 + 按协议的合成路由（Chat / Anthropic / Responses）
 - **Sibling-only 安全写入（OpenCode Console）**：`opencode` 主行是内置目录模型的落点，任何新模型只写入 `opencode-chat` / `opencode-messages` / `opencode-responses` 合成路由，主行的 `models` / `api` / `baseURL` 永不被改写
 - **协议分流卡隐藏（v0.6.0+）**：原生「模型」页里 `OpenCode Go · Chat Completions` 等合成路由卡片只在表现层隐藏（不改 settings、可逆），列表保持整洁
-- **卡片内托管面板（v0.6.0+）**：`OpenCode Go` / `OpenCode` 主卡内展开「协议分流模型（由插件托管）」，按协议列出该插件写入的合成路由模型，可逐个「删除」——删除即从 DSH 可用模型中移除，且随时可在「模型更新」里重新添加
+- **主卡内托管列表（v0.7.0+）**：`OpenCode Go` / `OpenCode` 主卡内以**官方「模型目录」完全相同的样式**列出插件写入合成路由的模型——行内类名在渲染时实时取自官方页面样式（非手抄复刻），包含 ID/名称只读框、展开箭头（上下文窗口/最大输出/输入类型）、官方同款垃圾桶图标；点垃圾桶确认后即删除，可随时在「模型更新」重新添加
 - **OpenCode 会话头自动附带**：为 OpenCode / OpenCode Go 路由在请求时附带 `x-opencode-session`（按会话，无需改 settings）
 - **下架仅提示**：上游不再提供的模型只提示，不删除
 - **写前备份**：每次写入前备份 `settings.yaml`（保留最近 20 份）
@@ -70,7 +70,7 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 
 多协议模型会自动落到对应路由；若某个新模型无法判定协议，会显示在「跳过」中，不会被错误添加。
 
-日常管理分流模型不必回到本页：**设置 → 模型** 中 `OpenCode Go` / `OpenCode` 主卡内即带「协议分流模型」面板（按协议分组、逐个删除；删除只影响 DSH 侧的可用列表，上游与本插件侧仍会照常列出，可在「模型更新」再次添加）。同页的协议分流卡（`OpenCode Go · Anthropic Messages` 等）会被插件自动隐藏，保持界面整洁；隐藏仅为显示层行为，settings 与卡片功能不受影响。
+日常管理分流模型不必回到本页：**设置 → 模型** 中 `OpenCode Go` / `OpenCode` 主卡内即带「协议分流模型（由插件托管）」列表，行样式与官方「模型目录」一致（信息只读；展开箭头查看上下文窗口/最大输出/输入类型；垃圾桶即删除）。删除只影响 DSH 侧的可用列表，上游与本插件侧仍会照常列出，可在「模型更新」再次添加。同页的协议分流卡（`OpenCode Go · Anthropic Messages` 等）会被插件自动隐藏，保持界面整洁；隐藏仅为显示层行为。若将来 DSH 升级导致官方类名无法复用，该列表会自动隐藏，不会以未样式化的形态出现。
 
 命令行（只读，不写 settings）：
 
@@ -85,7 +85,8 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 - 添加必须**显式点击**；启动时不会自动添加任何模型
 - 所有写入经 `ctx.settings.mutate`，由 DSH 自身 schema 与 `assertServiceable` 校验，非法配置会被拒绝、不落盘
 - 同一 provider 的合成路由若与已有同名 provider 冲突，会跳过以免误覆盖
-- **删除仅限插件托管的合成路由**：托管面板的「删除」会校验目标必须是本插件分流的 sibling（`opencode-chat` / `-messages` / `-responses` 等），主行与用户自建 provider 永远不可经由该接口改动；删除前照样备份 settings，删除后可随时重新添加
+- **删除仅限插件托管的合成路由**：托管列表的垃圾桶会校验目标必须是本插件分流的 sibling（`opencode-chat` / `-messages` / `-responses` 等），主行与用户自建 provider 永远不可经由该接口改动；删除前照样备份 settings，删除后可随时重新添加
+- **托管列表是只读展示**：不提供 ID/名称/容量编辑；行样式类名在渲染时从官方页面实时读取复用，DSH 若改动类名，列表自动隐藏而不是渲染成裸样式
 - **兄弟卡隐藏是纯表现层行为**：只在浏览器 DOM 里隐藏对应卡片，不改 settings、可随窗口刷新复原，也不影响这些路由的实际可用性
 - 凭证不落盘、不打印
 
