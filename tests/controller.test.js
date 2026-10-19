@@ -336,3 +336,79 @@ test('describe-shaped settings still apply additions through mutate', async () =
     harness.cleanup();
   }
 });
+
+test('managedSiblings groups live sibling models by protocol and skips empties', async () => {
+  const harness = makeHarness({ modelList: FULL_LIST });
+  try {
+    const providers = harness.document['llm-pi-ai'].providers;
+    providers['opencode-messages'] = {
+      displayName: 'OpenCode · Anthropic Messages',
+      apiKeyEnv: 'OPENCODE_API_KEY',
+      models: [{ id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5' }],
+    };
+    providers['opencode-chat'] = { displayName: 'OpenCode · Chat Completions', models: [{ id: 'qwen3.8-max' }] };
+    providers['opencode-responses'] = { displayName: 'OpenCode · Responses', models: [] };
+
+    const payload = harness.controller.managedSiblings();
+    assert.deepEqual(payload.routes.map((route) => route.provider), ['opencode'], 'routes without any sibling models are omitted');
+    const route = payload.routes[0];
+    assert.equal(route.displayName, 'OpenCode');
+    assert.deepEqual(route.siblings.map((sibling) => [sibling.provider, sibling.protocol, sibling.label]), [
+      ['opencode-chat', 'openai-completions', 'Chat Completions'],
+      ['opencode-messages', 'anthropic-messages', 'Anthropic Messages'],
+    ], 'empty sibling is omitted and protocol order is stable');
+    assert.deepEqual(route.siblings[0].models, [{ id: 'qwen3.8-max', name: 'qwen3.8-max' }], 'missing model names fall back to ids');
+    assert.equal(route.siblings[1].displayName, 'OpenCode · Anthropic Messages');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('removeSiblingModel drops one model from a sibling and check offers it again', async () => {
+  const opencodeList = ['claude-opus-5-5', 'claude-haiku-5-5'];
+  const harness = makeHarness({ modelList: FULL_LIST, opencodeList });
+  try {
+    await harness.controller.applySelection({ opencode: ['claude-haiku-5-5'] });
+    const providers = harness.document['llm-pi-ai'].providers;
+    assert.deepEqual(providers['opencode-messages'].models.map((model) => model.id), ['claude-haiku-5-5']);
+
+    const outcome = await harness.controller.removeSiblingModel('opencode-messages', 'claude-haiku-5-5');
+    assert.deepEqual(outcome, { removed: true, remaining: 0 });
+    assert.deepEqual(providers['opencode-messages'].models, []);
+    assert.deepEqual(providers.opencode.models.map((model) => model.id), ['claude-opus-5-5', 'mimo-v2.6-flash-free'], 'catalog row is never touched');
+    assert.equal(harness.state.data.lastRemove.provider, 'opencode-messages');
+    assert.equal(harness.state.data.lastRemove.modelId, 'claude-haiku-5-5');
+    const last = harness.mutations.at(-1);
+    assert.deepEqual(last.ops, [{ op: 'set', path: ['providers', 'opencode-messages', 'models'], value: [] }]);
+
+    const payload = await harness.controller.check();
+    const opencode = payload.results.find((result) => result.provider === 'opencode');
+    assert.ok(
+      opencode.newItems.some((item) => item.id === 'claude-haiku-5-5' && item.target === 'opencode-messages'),
+      'removed model is offered again by check',
+    );
+    assert.deepEqual(harness.controller.managedSiblings().routes, [], 'empty siblings vanish from the managed panel');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('removeSiblingModel rejects non-sibling providers and unknown models are read-only no-ops', async () => {
+  const harness = makeHarness({ modelList: FULL_LIST });
+  try {
+    await assert.rejects(() => harness.controller.removeSiblingModel('opencode', 'claude-opus-5-5'), /不是插件托管的协议分流路由/);
+    await assert.rejects(() => harness.controller.removeSiblingModel('openrouter', 'x/one'), /不是插件托管的协议分流路由/);
+    await assert.rejects(() => harness.controller.removeSiblingModel('opencode-messages', ''), /有效字符串/);
+    await assert.rejects(() => harness.controller.removeSiblingModel('opencode-messages', 'x'.repeat(201)), /有效字符串/);
+
+    const providers = harness.document['llm-pi-ai'].providers;
+    providers['opencode-messages'] = { models: [{ id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5' }] };
+    const before = harness.mutations.length;
+    const outcome = await harness.controller.removeSiblingModel('opencode-messages', 'nope');
+    assert.deepEqual(outcome, { removed: false, remaining: 1 });
+    assert.equal(harness.mutations.length, before, 'unknown model never writes');
+    assert.equal(harness.state.data.lastRemove, null);
+  } finally {
+    harness.cleanup();
+  }
+});

@@ -12,6 +12,8 @@
 - **纳管开关**：每个 provider 可随时「纳入检查」或关闭
 - **多协议自动安置**：混合协议的 provider（如 OpenCode Go、OpenCode Console）会自动拆分为主路由 + 按协议的合成路由（Chat / Anthropic / Responses）
 - **Sibling-only 安全写入（OpenCode Console）**：`opencode` 主行是内置目录模型的落点，任何新模型只写入 `opencode-chat` / `opencode-messages` / `opencode-responses` 合成路由，主行的 `models` / `api` / `baseURL` 永不被改写
+- **协议分流卡隐藏（v0.6.0+）**：原生「模型」页里 `OpenCode Go · Chat Completions` 等合成路由卡片只在表现层隐藏（不改 settings、可逆），列表保持整洁
+- **卡片内托管面板（v0.6.0+）**：`OpenCode Go` / `OpenCode` 主卡内展开「协议分流模型（由插件托管）」，按协议列出该插件写入的合成路由模型，可逐个「删除」——删除即从 DSH 可用模型中移除，且随时可在「模型更新」里重新添加
 - **OpenCode 会话头自动附带**：为 OpenCode / OpenCode Go 路由在请求时附带 `x-opencode-session`（按会话，无需改 settings）
 - **下架仅提示**：上游不再提供的模型只提示，不删除
 - **写前备份**：每次写入前备份 `settings.yaml`（保留最近 20 份）
@@ -68,6 +70,8 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 
 多协议模型会自动落到对应路由；若某个新模型无法判定协议，会显示在「跳过」中，不会被错误添加。
 
+日常管理分流模型不必回到本页：**设置 → 模型** 中 `OpenCode Go` / `OpenCode` 主卡内即带「协议分流模型」面板（按协议分组、逐个删除；删除只影响 DSH 侧的可用列表，上游与本插件侧仍会照常列出，可在「模型更新」再次添加）。同页的协议分流卡（`OpenCode Go · Anthropic Messages` 等）会被插件自动隐藏，保持界面整洁；隐藏仅为显示层行为，settings 与卡片功能不受影响。
+
 命令行（只读，不写 settings）：
 
 ```text
@@ -81,6 +85,8 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 - 添加必须**显式点击**；启动时不会自动添加任何模型
 - 所有写入经 `ctx.settings.mutate`，由 DSH 自身 schema 与 `assertServiceable` 校验，非法配置会被拒绝、不落盘
 - 同一 provider 的合成路由若与已有同名 provider 冲突，会跳过以免误覆盖
+- **删除仅限插件托管的合成路由**：托管面板的「删除」会校验目标必须是本插件分流的 sibling（`opencode-chat` / `-messages` / `-responses` 等），主行与用户自建 provider 永远不可经由该接口改动；删除前照样备份 settings，删除后可随时重新添加
+- **兄弟卡隐藏是纯表现层行为**：只在浏览器 DOM 里隐藏对应卡片，不改 settings、可随窗口刷新复原，也不影响这些路由的实际可用性
 - 凭证不落盘、不打印
 
 ## OpenCode Go 的 `x-opencode-session`
