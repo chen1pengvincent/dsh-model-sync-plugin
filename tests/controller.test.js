@@ -386,12 +386,12 @@ test('removeSiblingModel drops one model from a sibling and check offers it agai
 
     const outcome = await harness.controller.removeSiblingModel('opencode-messages', 'claude-haiku-5-5');
     assert.deepEqual(outcome, { removed: true, remaining: 0 });
-    assert.deepEqual(providers['opencode-messages'].models, []);
+    assert.equal(providers['opencode-messages'], undefined, 'a drained sibling is dropped entirely, never left with an empty models list');
     assert.deepEqual(providers.opencode.models.map((model) => model.id), ['claude-opus-5-5', 'mimo-v2.6-flash-free'], 'catalog row is never touched');
     assert.equal(harness.state.data.lastRemove.provider, 'opencode-messages');
     assert.equal(harness.state.data.lastRemove.modelId, 'claude-haiku-5-5');
     const last = harness.mutations.at(-1);
-    assert.deepEqual(last.ops, [{ op: 'set', path: ['providers', 'opencode-messages', 'models'], value: [] }]);
+    assert.deepEqual(last.ops, [{ op: 'unset', path: ['providers', 'opencode-messages'] }]);
 
     const payload = await harness.controller.check();
     const opencode = payload.results.find((result) => result.provider === 'opencode');
@@ -460,11 +460,11 @@ test('removeSiblingModels deletes across sibling routes with a single settings w
       { provider: 'opencode-chat', modelId: 'qwen3.8-max', removed: true, remaining: 0 },
     ]);
     assert.deepEqual(harness.mutations.at(-1).ops, [
-      { op: 'set', path: ['providers', 'opencode-messages', 'models'], value: [] },
-      { op: 'set', path: ['providers', 'opencode-chat', 'models'], value: [] },
+      { op: 'unset', path: ['providers', 'opencode-messages'] },
+      { op: 'unset', path: ['providers', 'opencode-chat'] },
     ]);
-    assert.deepEqual(providers['opencode-messages'].models, []);
-    assert.deepEqual(providers['opencode-chat'].models, []);
+    assert.equal(providers['opencode-messages'], undefined);
+    assert.equal(providers['opencode-chat'], undefined);
     assert.equal(harness.state.data.lastRemove.provider, 'opencode-messages');
     assert.equal(harness.state.data.lastRemove.modelId, 'claude-haiku-5-5');
     assert.deepEqual(harness.state.data.lastRemove.items, [
@@ -556,6 +556,110 @@ test('removeSiblingModels refuses user-created providers that merely share a bui
     ], 'once the plugin registers the sibling it is manageable again');
     const outcome = await harness.controller.removeSiblingModel('opencode-messages', 'my-private-model');
     assert.deepEqual(outcome, { removed: true, remaining: 0 });
+    assert.equal(providers['opencode-messages'], undefined, 'draining drops the plugin-created entry');
+  } finally {
+    await settle(harness.controller);
+    harness.cleanup();
+  }
+});
+
+test('mixed batch: a drained sibling is unset while a partially drained one keeps the rest', async () => {
+  const harness = makeHarness({ modelList: FULL_LIST });
+  try {
+    harness.state.rememberSiblings('opencode-go', ['opencode-go-messages', 'opencode-go-responses']);
+    const providers = harness.document['llm-pi-ai'].providers;
+    providers['opencode-go-messages'] = {
+      displayName: 'OpenCode Go · Anthropic Messages',
+      api: 'anthropic-messages',
+      baseURL: 'https://opencode.ai/zen/go',
+      apiKeyEnv: 'OPENCODE_GO_API_KEY',
+      models: [{ id: 'minimax-m3', name: 'MiniMax M3' }, { id: 'hy4-preview', name: 'HY4 Preview' }],
+    };
+    providers['opencode-go-responses'] = {
+      displayName: 'OpenCode Go · Responses',
+      api: 'openai-responses',
+      baseURL: 'https://opencode.ai/zen/go/v1',
+      apiKeyEnv: 'OPENCODE_GO_API_KEY',
+      models: [{ id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' }],
+    };
+    const before = harness.mutations.length;
+    const outcome = await harness.controller.removeSiblingModels([
+      { provider: 'opencode-go-messages', modelId: 'hy4-preview' },
+      { provider: 'opencode-go-responses', modelId: 'gpt-5.6-luna' },
+    ]);
+    assert.equal(harness.mutations.length, before + 1, 'one mutate for the mixed batch');
+    assert.deepEqual(harness.mutations.at(-1).ops, [
+      { op: 'set', path: ['providers', 'opencode-go-messages', 'models'], value: [{ id: 'minimax-m3', name: 'MiniMax M3' }] },
+      { op: 'unset', path: ['providers', 'opencode-go-responses'] },
+    ]);
+    assert.equal(outcome.removed, 2);
+    assert.deepEqual(outcome.results, [
+      { provider: 'opencode-go-messages', modelId: 'hy4-preview', removed: true, remaining: 1 },
+      { provider: 'opencode-go-responses', modelId: 'gpt-5.6-luna', removed: true, remaining: 0 },
+    ]);
+    assert.equal(providers['opencode-go-responses'], undefined);
+    assert.deepEqual(providers['opencode-go-messages'].models.map((model) => model.id), ['minimax-m3']);
+  } finally {
+    await settle(harness.controller);
+    harness.cleanup();
+  }
+});
+
+test('a drained sibling is rebuilt from scratch when re-added', async () => {
+  const opencodeList = ['claude-opus-5-5', 'claude-haiku-5-5'];
+  const harness = makeHarness({ modelList: FULL_LIST, opencodeList });
+  try {
+    await harness.controller.applySelection({ opencode: ['claude-haiku-5-5'] });
+    const providers = harness.document['llm-pi-ai'].providers;
+    assert.equal(providers['opencode-messages'].api, 'anthropic-messages');
+
+    await harness.controller.removeSiblingModel('opencode-messages', 'claude-haiku-5-5');
+    assert.equal(providers['opencode-messages'], undefined, 'the drained sibling entry is gone');
+
+    const again = await harness.controller.applySelection({ opencode: ['claude-haiku-5-5'] });
+    assert.deepEqual(again.errors, []);
+    assert.equal(providers['opencode-messages'].api, 'anthropic-messages', 're-add recreates the entry with its protocol');
+    assert.equal(providers['opencode-messages'].baseURL, 'https://opencode.ai/zen');
+    assert.equal(providers['opencode-messages'].apiKeyEnv, 'OPENCODE_API_KEY');
+    assert.deepEqual(providers['opencode-messages'].models.map((model) => model.id), ['claude-haiku-5-5']);
+  } finally {
+    await settle(harness.controller);
+    harness.cleanup();
+  }
+});
+
+test('repairs never leave a sibling with an empty models list', async () => {
+  const harness = makeHarness({ modelList: FULL_LIST });
+  try {
+    harness.state.rememberSiblings('opencode-go', ['opencode-go-messages']);
+    const providers = harness.document['llm-pi-ai'].providers;
+    providers['opencode-go-messages'] = {
+      displayName: 'OpenCode Go · Anthropic Messages',
+      api: 'anthropic-messages',
+      baseURL: 'https://opencode.ai/zen/go',
+      apiKeyEnv: 'OPENCODE_GO_API_KEY',
+      models: [{ id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna' }],
+    };
+    const outcome = await harness.controller.applySelection({}, { repairs: true });
+    assert.deepEqual(outcome.errors, []);
+    assert.equal(providers['opencode-go-messages'], undefined, 'a repair that drains a sibling unsets it instead of writing an empty list');
+    assert.deepEqual(providers['opencode-go-responses'].models.map((model) => model.id), ['gpt-5.6-luna']);
+    assert.equal(providers['opencode-go-responses'].api, 'openai-responses');
+  } finally {
+    await settle(harness.controller);
+    harness.cleanup();
+  }
+});
+
+test('repairs never drain the main route below one model', async () => {
+  const harness = makeHarness({ modelList: FULL_LIST });
+  try {
+    const providers = harness.document['llm-pi-ai'].providers;
+    providers['opencode-go'].models = [{ id: 'minimax-m3', name: 'MiniMax M3' }];
+    const outcome = await harness.controller.applySelection({}, { repairs: true });
+    assert.deepEqual(outcome.errors, []);
+    assert.equal(harness.mutations.length, 0, 'a repair that would empty the main route is skipped');
+    assert.deepEqual(providers['opencode-go'].models.map((model) => model.id), ['minimax-m3']);
   } finally {
     await settle(harness.controller);
     harness.cleanup();
