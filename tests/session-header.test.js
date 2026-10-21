@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { profileHosts } from '../lib/index.js';
 import {
   SESSION_HEADER,
   hasSessionHeader,
@@ -179,4 +180,23 @@ test('installSessionHeader can be disabled by config', () => {
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test('profileHosts reads entry-based settings through describe()', () => {
+  const ctx = {
+    get: () => ({
+      describe: () => [{
+        ns: 'llm-pi-ai',
+        value: {
+          providers: {
+            'opencode-go': { baseURL: 'https://gateway.example/v1' },
+            opencode: { baseUrl: 'https://console.example/api' },
+          },
+        },
+      }],
+    }),
+  };
+  assert.deepEqual(profileHosts(ctx, 'opencode-go'), ['gateway.example']);
+  assert.deepEqual(profileHosts(ctx, 'opencode'), ['console.example']);
+  assert.deepEqual(profileHosts(ctx, 'missing'), []);
 });
