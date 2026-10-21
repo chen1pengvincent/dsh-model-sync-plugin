@@ -266,6 +266,25 @@ test('writable file credential reports configured and not shadowed', async () =>
   }
 });
 
+test('0.2.1 env fallback is writable and is not reported as shadowed', async () => {
+  const harness = makeHarness({
+    modelList: FULL_LIST,
+    credentialDescription: { configured: true, source: 'env', writable: true },
+  });
+  try {
+    const payload = await harness.controller.check();
+    const row = payload.results.find((result) => result.provider === 'opencode-go');
+    assert.equal(row.credential.configured, true);
+    assert.equal(row.credential.source, 'env');
+    assert.equal(row.credential.writable, true);
+    assert.equal(row.credential.readOnly, false);
+    assert.equal(row.credential.shadowed, false, 'stored credentials outrank env on 0.2.1+');
+    assert.equal(row.credential.warning, undefined);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test('absent credentials describe leaves results without a credential fact', async () => {
   const harness = makeHarness({ modelList: FULL_LIST });
   const realGet = harness.controller.ctx.get.bind(harness.controller.ctx);

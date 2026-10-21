@@ -41,7 +41,7 @@
 
 ## 安装
 
-前置：DSH Desktop 或 dsh CLI，且 profile 目录可被 pnpm 管理。
+前置：DSH Desktop（含 DSH NEXT）或 dsh CLI，且 profile 目录可被 pnpm 管理。DSH NEXT 2.0.19-next 与 DSH Desktop 2.0.18 使用同一内核 `0.2.1-rc.2`，安装到默认 `desktop` profile 即可；DSH NEXT 与稳定版默认共用 `~/.dsh`，如需隔离请给 DSH NEXT 设置绝对路径 `DSH_DESKTOP_NEXT_HOME`。
 
 ```bash
 # 安装到 desktop profile（web profile 同理替换 --profile web）
@@ -54,7 +54,7 @@ dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin
 dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 ```
 
-安装后**重启 DSH**（插件是启动期加载）。若 `dsh` 提示找不到 pnpm，请先让 pnpm 进入 PATH。
+安装后**重启 DSH**（插件是启动期加载）。若 `dsh` 提示找不到 pnpm，请先让 pnpm 进入 PATH。DSH 0.2.1+ 会按本包的 `engines.dsh`（当前 `>=0.1.2-rc.1 <0.3.0-0`）在安装和启动时做兼容检查；若安装被拒，请升级插件版本或核对 DSH 内核版本，不要用版本豁免绕过。
 
 > 安装后请确认 profile 的 `package.json` 里 `dsh.profile.bundles` 已包含 `dsh-model-sync`；若没有，手动加入该条目再重启（bundle 层才会带上插件的客户端面板）。
 >
@@ -95,9 +95,10 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 ## OpenCode Go 的 `x-opencode-session`
 
 自 2026-09-05 起，OpenCode / OpenCode Go 要求每个推理请求携带一个**按会话稳定**的
-`x-opencode-session`，否则返回 `400 MissingSessionID`。DSH 安装的 pi-ai 适配器
-（`@earendil-works/pi-ai@0.85.1`）不会发送这个头，而本插件为未收录模型写入的
-`opencode-go` 路由带显式 `api:`，即使将来 pi-ai 内置了包装器也**覆盖不到**这条路径。
+`x-opencode-session`，否则返回 `400 MissingSessionID`。DSH 安装的 pi-ai 适配器版本
+随内核变化（0.2.1 内核为 `@earendil-works/pi-ai@1.0.2`）；本插件不依赖它是否发送——
+在 `fetch` 层兜底注入，若调用方已设置该头则**不覆盖**。`opencode-go` 路由带显式 `api:`
+时，pi-ai 内置包装器可能覆盖不到这条路径，因此请求期兜底仍然必要。
 
 本插件在**请求时**补上这个头，不写 settings：
 
@@ -132,23 +133,25 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 
 ## 数据与状态
 
+路径以进程的 `DSH_HOME` 为根（默认 `~/.dsh`；DSH NEXT 若设置了 `DSH_DESKTOP_NEXT_HOME`，则随之切换）：
+
 | 路径 | 说明 |
 |---|---|
-| `~/.dsh/model-sync/state.json` | 上次检查/应用、纳管开关、合成路由账本 |
-| `~/.dsh/model-sync/models.dev.json` | models.dev 元数据缓存（24h TTL，用于协议分类） |
-| `~/.dsh/model-sync/backups/` | settings.yaml 写前备份（最近 20 份） |
+| `$DSH_HOME/model-sync/state.json` | 上次检查/应用、纳管开关、合成路由账本 |
+| `$DSH_HOME/model-sync/models.dev.json` | models.dev 元数据缓存（24h TTL，用于协议分类） |
+| `$DSH_HOME/model-sync/backups/` | settings.yaml 写前备份（最近 20 份；文件不存在时跳过） |
 
 ## 已知问题与排查
 
-### API Key 在设置页只读、无法更改（凭证被启动环境变量遮蔽）
+### API Key 在设置页只读、无法更改
 
 **现象**：设置 → 模型 中某 provider 的 Key 输入框不可编辑，或保存后实际请求仍用旧 Key。
 
-**原因**：同名环境变量（如 `OPENCODE_GO_API_KEY`）存在于 DSH 进程的启动环境中（典型来源：`launchctl setenv` 写进了 launchd 用户域）。DSH 凭证解析优先级为「进程环境 > 凭证文件 > .env」，且环境来源的凭证被刻意设计为只读——防止「你以为改了、实际被遮蔽」。注意：DSH 的「应用内重启」（Electron relaunch）会继承旧进程环境，只有 ⌘Q 完全退出后从 Dock/访达冷启动才会重新读取 launchd 环境。
+**DSH 0.2.1+ / DSH NEXT 2.0.19-next**：Web 与桌面端优先使用已保存的凭据，启动环境变量只是兜底，不再遮蔽已保存的 Key——在设置页保存新 Key 即会生效。headless profile 则相反：默认只读环境变量与 `.env`，不读取已保存的密钥，因此换 Key 要更新进程环境或 `.env`。若桌面端输入框仍只读，说明 `credentials.describe` 报告的来源本身 `writable: false`，请按该来源的提示处理（例如由组织的凭据提供方管理）。
 
-**修复**：`launchctl unsetenv <变量名>`（或从 shell 配置文件中移除 export），然后 ⌘Q 完全退出并冷启动 DSH，之后设置页即可编辑。
+**DSH ≤ 0.2.0（历史行为）**：同名环境变量（如 `OPENCODE_GO_API_KEY`，典型来源是 `launchctl setenv`）会遮蔽凭证文件且被标记为只读。此时执行 `launchctl unsetenv <变量名>`（或移除 shell 里的 export），再 ⌘Q 完全退出并从 Dock/访达冷启动 DSH。仅关闭窗口或应用内重启会继承旧环境。
 
-**本插件的检测（v0.5.0+）**：`check` 对每个纳管路由调用 `credentials.describe`（只读元数据，不读取值），发现凭证被环境遮蔽（`writable: false`）时，在设置面板对应卡片上显示醒目警告，并在 `/model-sync check` / `status` 输出中给出 ⚠️ 行与修复步骤。插件只检测和指引，不替用户修改系统环境。
+**本插件的检测（v0.5.0+）**：`check` 对每个纳管路由调用 `credentials.describe`（只读元数据，不读取值），仅在来源确实只读（`writable: false`）时显示 ⚠️ 警告与来源对应的处理建议；0.2.1 起环境兜底是可写的，不会再被误报为「被环境遮蔽」。插件只检测和指引，不替用户修改系统环境。
 
 ### DSH Desktop 2.0.6：official 路由报 `DeepSeek request extension preparation failed`
 
@@ -182,7 +185,8 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 - 仓库 topics 含 `dsh-plugin`，会被 dshfind、dsh-market 等社区目录自动索引（收录要求：可用 `dsh plugin add` 安装且声明 `dsh.bundle`）
 - 本包声明 `package.json#dshWorkshop`（`omdsh-workshop-package/v1`），面向 OMDSH Hub（hub.omdsh.dev）的入库与验证；验证证据见 [`docs/ecosystem.md`](docs/ecosystem.md)
 - 声明的可验证能力：命令 `/model-sync check`（只读，不写 settings）
-- 兼容基线：DSH kernel `0.1.2-rc.1`（DSH Desktop 2.0.6）与 `0.2.0-rc.2`（DSH Desktop 2.0.17；该版把 settings.yaml 迁移为条目式 Config，旧的 `settings.get(ns)` 读取形态不存在了，v0.5.1 起两种形态都支持——低于 v0.5.1 的版本在 2.0.17 上会把全部路由误报为「未纳入检查」）
+- 兼容基线：DSH kernel `0.2.1-rc.2`（DSH Desktop 2.0.18 与 DSH NEXT 2.0.19-next），并保留 `0.2.0-rc.2`（DSH Desktop 2.0.17）与 `0.1.2-rc.1`（DSH Desktop 2.0.6）的兼容路径。`0.2.0-rc.2` 把 settings.yaml 迁移为条目式 Config，旧的 `settings.get(ns)` 读取形态不存在；v0.5.1 起两种形态都支持。`package.json#engines.dsh` 声明 `>=0.1.2-rc.1 <0.3.0-0`，由 DSH 0.2.1+ 在安装与启动时执行；不声明 `engines.dsh` 的旧内核不施加版本约束。
+- DSH 0.2.1 起 Web/桌面端优先使用已保存的凭据，headless 只读环境变量与 `.env`；插件按新的 `credentials.describe` 语义只在来源确实只读时告警，0.2.1 的环境兜底不会再被误报为遮蔽。
 
 ## 开发
 
@@ -191,7 +195,7 @@ node --test                 # 单元测试（引擎 + 控制器 + 会话头）
 node scripts/dry-run.mjs    # 真实上游 dry-run：读本机凭证，只读不写
 ```
 
-依赖 DSH kernel 的公开 seam：`ctx.settings`、`ctx.credentials`、`ctx.webServer`、`llm/stream` 瀑布、客户端 `slots`。会话头半仅使用 `llm/stream` 与 `globalThis.fetch`，不依赖内核内部符号。当前适配内核 `0.2.0-rc.2`（DSH Desktop 2.0.17），兼容 `0.1.2-rc.1`（DSH Desktop 2.0.6）。
+依赖 DSH kernel 的公开 seam：`ctx.settings`、`ctx.credentials`、`ctx.webServer`、`llm/stream` 瀑布、客户端 `slots`。会话头半仅使用 `llm/stream` 与 `globalThis.fetch`，不依赖内核内部符号。当前适配内核 `0.2.1-rc.2`（DSH Desktop 2.0.18 / DSH NEXT 2.0.19-next），兼容 `0.2.0-rc.2`（DSH Desktop 2.0.17）与 `0.1.2-rc.1`（DSH Desktop 2.0.6）的历史路径。
 
 ## 卸载
 
