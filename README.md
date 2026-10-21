@@ -2,6 +2,15 @@
 
 为 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 监控各服务商**上游 `/models`**，列出新增模型；勾选后一键添加到 DSH。**不自动删除、不自动改写、不覆盖你在原生「模型」模块的编辑。**
 
+## 版本与 DSH NEXT 风险
+
+| 版本 | 定位 | 建议 |
+|---|---|---|
+| `v0.9.1` | **稳定版（保留）** | 日常使用；遇到兼容问题时回退 |
+| `v0.9.2` | DSH kernel `0.2.1` / DSH NEXT 兼容更新 | DSH Desktop 2.0.18 已实测；NEXT 部分仍属预览 |
+
+> **DSH NEXT 风险提示**：DSH NEXT 2.0.19-next 是社区项目（`anywhere-labs/dsh-desktop`），不是 DeepSeek 官方发行版。`v0.9.2` 只在 DSH Desktop 2.0.18 的**同一 kernel `0.2.1-rc.2`** 上完成宿主启动、API、设置面板和无头客户端验证；**NEXT 自有 GUI、客户端壳和插件管理界面尚未完整验证**，后续 NEXT 版本也可能改变行为。建议先在独立测试 profile 验证，不要直接用于生产环境；如遇异常，回退 `v0.9.1`。
+
 ## 功能
 
 - **检查更新**：启动后自动检查一次（只读），也可在面板手动触发
@@ -44,8 +53,11 @@
 前置：DSH Desktop（含 DSH NEXT）或 dsh CLI，且 profile 目录可被 pnpm 管理。DSH NEXT 2.0.19-next 与 DSH Desktop 2.0.18 使用同一内核 `0.2.1-rc.2`，安装到默认 `desktop` profile 即可；DSH NEXT 与稳定版默认共用 `~/.dsh`，如需隔离请给 DSH NEXT 设置绝对路径 `DSH_DESKTOP_NEXT_HOME`。
 
 ```bash
-# 安装到 desktop profile（web profile 同理替换 --profile web）
-dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin
+# 稳定版 v0.9.1（推荐日常使用）
+dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin#v0.9.1
+
+# v0.9.2（DSH kernel 0.2.1 / NEXT 兼容更新；先在测试 profile 验证）
+dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin#v0.9.2
 ```
 
 或使用本地路径：
@@ -54,7 +66,7 @@ dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin
 dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 ```
 
-安装后**重启 DSH**（插件是启动期加载）。若 `dsh` 提示找不到 pnpm，请先让 pnpm 进入 PATH。DSH 0.2.1+ 会按本包的 `engines.dsh`（当前 `>=0.1.2-rc.1 <0.3.0-0`）在安装和启动时做兼容检查；若安装被拒，请升级插件版本或核对 DSH 内核版本，不要用版本豁免绕过。
+安装后**重启 DSH**（插件是启动期加载）。若 `dsh` 提示找不到 pnpm，请先让 pnpm 进入 PATH。`v0.9.2` 起声明 `engines.dsh`（`>=0.1.2-rc.1 <0.3.0-0`），DSH 0.2.1+ 会在安装和启动时做兼容检查；若安装被拒，请升级插件版本或核对 DSH 内核版本，不要用版本豁免绕过。`v0.9.1` 未声明该字段，在 0.2.1 上仍可用，但没有安装期版本校验。
 
 > 安装后请确认 profile 的 `package.json` 里 `dsh.profile.bundles` 已包含 `dsh-model-sync`；若没有，手动加入该条目再重启（bundle 层才会带上插件的客户端面板）。
 >
@@ -185,7 +197,7 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 - 仓库 topics 含 `dsh-plugin`，会被 dshfind、dsh-market 等社区目录自动索引（收录要求：可用 `dsh plugin add` 安装且声明 `dsh.bundle`）
 - 本包声明 `package.json#dshWorkshop`（`omdsh-workshop-package/v1`），面向 OMDSH Hub（hub.omdsh.dev）的入库与验证；验证证据见 [`docs/ecosystem.md`](docs/ecosystem.md)
 - 声明的可验证能力：命令 `/model-sync check`（只读，不写 settings）
-- 兼容基线：DSH kernel `0.2.1-rc.2`（DSH Desktop 2.0.18 与 DSH NEXT 2.0.19-next），并保留 `0.2.0-rc.2`（DSH Desktop 2.0.17）与 `0.1.2-rc.1`（DSH Desktop 2.0.6）的兼容路径。`0.2.0-rc.2` 把 settings.yaml 迁移为条目式 Config，旧的 `settings.get(ns)` 读取形态不存在；v0.5.1 起两种形态都支持。`package.json#engines.dsh` 声明 `>=0.1.2-rc.1 <0.3.0-0`，由 DSH 0.2.1+ 在安装与启动时执行；不声明 `engines.dsh` 的旧内核不施加版本约束。
+- 兼容基线：DSH kernel `0.2.1-rc.2`（DSH Desktop 2.0.18 已实测；DSH NEXT 2.0.19-next 仅内核层面验证），并保留 `0.2.0-rc.2`（DSH Desktop 2.0.17）与 `0.1.2-rc.1`（DSH Desktop 2.0.6）的兼容路径。稳定版仍为 `v0.9.1`。`0.2.0-rc.2` 把 settings.yaml 迁移为条目式 Config，旧的 `settings.get(ns)` 读取形态不存在；v0.5.1 起两种形态都支持。`package.json#engines.dsh` 声明 `>=0.1.2-rc.1 <0.3.0-0`，由 DSH 0.2.1+ 在安装与启动时执行；不声明 `engines.dsh` 的旧内核不施加版本约束。
 - DSH 0.2.1 起 Web/桌面端优先使用已保存的凭据，headless 只读环境变量与 `.env`；插件按新的 `credentials.describe` 语义只在来源确实只读时告警，0.2.1 的环境兜底不会再被误报为遮蔽。
 
 ## 开发
@@ -195,7 +207,7 @@ node --test                 # 单元测试（引擎 + 控制器 + 会话头）
 node scripts/dry-run.mjs    # 真实上游 dry-run：读本机凭证，只读不写
 ```
 
-依赖 DSH kernel 的公开 seam：`ctx.settings`、`ctx.credentials`、`ctx.webServer`、`llm/stream` 瀑布、客户端 `slots`。会话头半仅使用 `llm/stream` 与 `globalThis.fetch`，不依赖内核内部符号。当前适配内核 `0.2.1-rc.2`（DSH Desktop 2.0.18 / DSH NEXT 2.0.19-next），兼容 `0.2.0-rc.2`（DSH Desktop 2.0.17）与 `0.1.2-rc.1`（DSH Desktop 2.0.6）的历史路径。
+依赖 DSH kernel 的公开 seam：`ctx.settings`、`ctx.credentials`、`ctx.webServer`、`llm/stream` 瀑布、客户端 `slots`。会话头半仅使用 `llm/stream` 与 `globalThis.fetch`，不依赖内核内部符号。当前适配内核 `0.2.1-rc.2`（DSH Desktop 2.0.18 已实测；NEXT 2.0.19-next 仅内核层面验证），兼容 `0.2.0-rc.2`（DSH Desktop 2.0.17）与 `0.1.2-rc.1`（DSH Desktop 2.0.6）的历史路径。
 
 ## 卸载
 

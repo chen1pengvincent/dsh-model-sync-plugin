@@ -69,6 +69,8 @@ dsh plugin --profile <name> add github:chen1pengvincent/dsh-model-sync-plugin#<4
 
 ## 0.2.1 / DSH NEXT 实测（2026-10-21）
 
+> 本记录不构成对 DSH NEXT 的完整兼容承诺；NEXT GUI 未验证。稳定版仍为 `v0.9.1`，`v0.9.2` 为 0.2.1/NEXT 兼容更新。
+
 在隔离的 `DSH_HOME` 中用 DSH Desktop 2.0.18 自带的 kernel `0.2.1-rc.2` 启动自定义 `web` profile：
 
 - `dsh --profile nextweb --dump-config` 组合出 `- id: dsh-model-sync` 行
