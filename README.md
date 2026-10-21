@@ -6,8 +6,8 @@
 
 | 版本 | 定位 | 建议 |
 |---|---|---|
-| `v0.9.1` | **稳定版（保留）** | 日常使用；遇到兼容问题时回退 |
-| `v0.9.2` | DSH kernel `0.2.1` / DSH NEXT 兼容更新 | DSH Desktop 2.0.18 已实测；NEXT 部分仍属预览 |
+| `v0.9.1` | **稳定版（保留）** | DSH Desktop ≤2.0.17 / kernel 0.2.0 日常使用；兼容问题时可回退 |
+| `v0.9.2` | DSH kernel `0.2.1` / DSH NEXT 兼容更新 | DSH Desktop 2.0.18 推荐；NEXT 部分仍属预览 |
 
 > **DSH NEXT 风险提示**：DSH NEXT 2.0.19-next 是社区项目（`anywhere-labs/dsh-desktop`），不是 DeepSeek 官方发行版。`v0.9.2` 只在 DSH Desktop 2.0.18 的**同一 kernel `0.2.1-rc.2`** 上完成宿主启动、API、设置面板和无头客户端验证；**NEXT 自有 GUI、客户端壳和插件管理界面尚未完整验证**，后续 NEXT 版本也可能改变行为。建议先在独立测试 profile 验证，不要直接用于生产环境；如遇异常，回退 `v0.9.1`。
 
@@ -50,13 +50,13 @@
 
 ## 安装
 
-前置：DSH Desktop（含 DSH NEXT）或 dsh CLI，且 profile 目录可被 pnpm 管理。DSH NEXT 2.0.19-next 与 DSH Desktop 2.0.18 使用同一内核 `0.2.1-rc.2`，安装到默认 `desktop` profile 即可；DSH NEXT 与稳定版默认共用 `~/.dsh`，如需隔离请给 DSH NEXT 设置绝对路径 `DSH_DESKTOP_NEXT_HOME`。
+前置：DSH Desktop（含 DSH NEXT）或 dsh CLI，且 profile 目录可被 pnpm 管理。DSH NEXT 2.0.19-next 与 DSH Desktop 2.0.18 使用同一内核 `0.2.1-rc.2`，可安装到默认 `desktop` profile。注意：DSH NEXT 与稳定版默认共用 `~/.dsh`；只在 NEXT 上测试 `v0.9.2` 时，请先给 DSH NEXT 设置独立的绝对路径 `DSH_DESKTOP_NEXT_HOME`，否则升级同一个 `desktop` profile 也会影响稳定版。
 
 ```bash
-# 稳定版 v0.9.1（推荐日常使用）
+# 稳定版 v0.9.1（DSH Desktop ≤2.0.17 / kernel 0.2.0 日常使用）
 dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin#v0.9.1
 
-# v0.9.2（DSH kernel 0.2.1 / NEXT 兼容更新；先在测试 profile 验证）
+# v0.9.2（DSH Desktop 2.0.18 推荐；NEXT 兼容更新，先在独立测试环境验证）
 dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin#v0.9.2
 ```
 
@@ -66,7 +66,7 @@ dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin#v
 dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 ```
 
-安装后**重启 DSH**（插件是启动期加载）。若 `dsh` 提示找不到 pnpm，请先让 pnpm 进入 PATH。`v0.9.2` 起声明 `engines.dsh`（`>=0.1.2-rc.1 <0.3.0-0`），DSH 0.2.1+ 会在安装和启动时做兼容检查；若安装被拒，请升级插件版本或核对 DSH 内核版本，不要用版本豁免绕过。`v0.9.1` 未声明该字段，在 0.2.1 上仍可用，但没有安装期版本校验。
+安装后**重启 DSH**（插件是启动期加载）。若 `dsh` 提示找不到 pnpm，请先让 pnpm 进入 PATH。`v0.9.2` 起声明 `engines.dsh`（`>=0.1.2-rc.1 <0.3.0-0`），DSH 0.2.1+ 会在安装和启动时做兼容检查；若安装被拒，请升级插件版本或核对 DSH 内核版本，不要用版本豁免绕过。`v0.9.1` 未声明该字段，在 0.2.1 上仍可用，但没有安装期版本校验，也不含 `v0.9.2` 的兼容修复。
 
 > 安装后请确认 profile 的 `package.json` 里 `dsh.profile.bundles` 已包含 `dsh-model-sync`；若没有，手动加入该条目再重启（bundle 层才会带上插件的客户端面板）。
 >
