@@ -6,10 +6,11 @@
 
 | 版本 | 定位 | 建议 |
 |---|---|---|
-| `v0.9.1` | **稳定版（保留）** | DSH Desktop ≤2.0.17 / kernel 0.2.0 日常使用；兼容问题时可回退 |
-| `v0.9.2` | DSH kernel `0.2.1` / DSH NEXT 兼容更新 | DSH Desktop 2.0.18 推荐；NEXT 部分仍属预览 |
+| `v0.9.3` | **当前稳定版** | DSH Desktop 2.0.18 / kernel 0.2.1 推荐；含模型选择器按服务商合并 |
+| `v0.9.2` | DSH NEXT 兼容 pre-release（保留） | 已被 `v0.9.3` 取代；NEXT 仍需独立验证 |
+| `v0.9.1` | 稳定回退版 | DSH Desktop ≤2.0.17 / kernel 0.2.0 日常使用 |
 
-> **DSH NEXT 风险提示**：DSH NEXT 2.0.19-next 是社区项目（`anywhere-labs/dsh-desktop`），不是 DeepSeek 官方发行版。`v0.9.2` 只在 DSH Desktop 2.0.18 的**同一 kernel `0.2.1-rc.2`** 上完成宿主启动、API、设置面板和无头客户端验证；**NEXT 自有 GUI、客户端壳和插件管理界面尚未完整验证**，后续 NEXT 版本也可能改变行为。建议先在独立测试 profile 验证，不要直接用于生产环境；如遇异常，回退 `v0.9.1`。
+> **DSH NEXT 风险提示**：DSH NEXT 2.0.19-next 是社区项目（`anywhere-labs/dsh-desktop`），不是 DeepSeek 官方发行版。`v0.9.3` 已在 DSH Desktop 2.0.18 的**同一 kernel `0.2.1-rc.2`** 上完成宿主启动、API、设置面板、composer 与 `/model` 模型选择器验证；**NEXT 自有 GUI、客户端壳和插件管理界面仍未完整验证**，后续 NEXT 版本也可能改变行为。`v0.9.3` 的 stable 表示已验证的 Desktop 环境稳定；在 NEXT 上使用仍建议独立 `DSH_DESKTOP_NEXT_HOME`/测试 profile，异常时回退 `v0.9.1`。
 
 ## 功能
 
@@ -19,7 +20,8 @@
 - **命令**：会话内运行 `/model-sync check` 只读检查并输出各 provider 新模型数量；`/model-sync status` 查看上次结果
 - **搜索/筛选**：支持按模型 id 或名称过滤，`全选 / 清空` 只作用于当前筛选结果
 - **纳管开关**：每个 provider 可随时「纳入检查」或关闭
-- **多协议自动安置**：混合协议的 provider（如 OpenCode Go、OpenCode Console）会自动拆分为主路由 + 按协议的合成路由（Chat / Anthropic / Responses）
+- **多协议自动安置（选择器不分组）**：混合协议的 provider（如 OpenCode Go、OpenCode Console）会在请求层拆分为主路由 + 按协议的合成路由（Chat / Anthropic / Responses）；composer 与 `/model` 中仍只显示一个服务商分组，协议差异对用户不可见
+- **模型选择器按服务商合并（v0.9.3+）**：`OpenCode Go` / `OpenCode` 的协议分流模型统一归入主服务商分组，不出现 `OpenCode Go · Responses` 等分组；完全复用官方选择器，不新增自定义列表界面。选中模型后由插件透明映射回真实协议路由，请求仍走正确协议
 - **Sibling-only 安全写入（OpenCode Console）**：`opencode` 主行是内置目录模型的落点，任何新模型只写入 `opencode-chat` / `opencode-messages` / `opencode-responses` 合成路由，主行的 `models` / `api` / `baseURL` 永不被改写
 - **协议分流卡隐藏（v0.6.0+）**：原生「模型」页里 `OpenCode Go · Chat Completions` 等合成路由卡片只在表现层隐藏（不改 settings、可逆），列表保持整洁
 - **托管模型并入官方模型目录（v0.9.0+）**：`OpenCode Go` / `OpenCode` 主卡点「编辑 → 自定义设置」展开后，插件写入合成路由的模型以**与官方完全相同的行**直接出现在官方「模型目录」列表中原生行之后（渲染时实时复用官方类名与图标，非手抄复刻），无任何标题、分隔或插件标识；行内模型 ID / 显示名称 / 上下文窗口 / 最大输出 token 数输入框保持只读，空值显示灰字「由插件自动获取」、悬停也有同款提示，展开箭头查看输入类型。删除走官方编辑器的草稿语义：点行内垃圾桶图标并确认后该行先从列表隐藏，点「保存」才真正删除，点「取消」或关闭编辑器则恢复显示。删除某个协议分流的最后一个模型时，该分流整条会一并从设置中移除（DSH 不接受没有任何模型的路由），需要时可在「模型更新」里重新添加。未编辑时与官方行为一致，完全不可见
@@ -50,14 +52,14 @@
 
 ## 安装
 
-前置：DSH Desktop（含 DSH NEXT）或 dsh CLI，且 profile 目录可被 pnpm 管理。DSH NEXT 2.0.19-next 与 DSH Desktop 2.0.18 使用同一内核 `0.2.1-rc.2`，可安装到默认 `desktop` profile。注意：DSH NEXT 与稳定版默认共用 `~/.dsh`；只在 NEXT 上测试 `v0.9.2` 时，请先给 DSH NEXT 设置独立的绝对路径 `DSH_DESKTOP_NEXT_HOME`，否则升级同一个 `desktop` profile 也会影响稳定版。
+前置：DSH Desktop（含 DSH NEXT）或 dsh CLI，且 profile 目录可被 pnpm 管理。DSH NEXT 2.0.19-next 与 DSH Desktop 2.0.18 使用同一内核 `0.2.1-rc.2`，可安装到默认 `desktop` profile。注意：DSH NEXT 与稳定版默认共用 `~/.dsh`；在 NEXT 上验证 `v0.9.3` 时，请先给 DSH NEXT 设置独立的绝对路径 `DSH_DESKTOP_NEXT_HOME`，否则升级同一个 `desktop` profile 也会影响稳定版。
 
 ```bash
-# 稳定版 v0.9.1（DSH Desktop ≤2.0.17 / kernel 0.2.0 日常使用）
-dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin#v0.9.1
+# 当前稳定版 v0.9.3（DSH Desktop 2.0.18 / kernel 0.2.1 推荐）
+dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin#v0.9.3
 
-# v0.9.2（DSH Desktop 2.0.18 推荐；NEXT 兼容更新，先在独立测试环境验证）
-dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin#v0.9.2
+# 稳定回退版 v0.9.1（DSH Desktop ≤2.0.17 / kernel 0.2.0）
+dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin#v0.9.1
 ```
 
 或使用本地路径：
@@ -66,7 +68,7 @@ dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin#v
 dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 ```
 
-安装后**重启 DSH**（插件是启动期加载）。若 `dsh` 提示找不到 pnpm，请先让 pnpm 进入 PATH。`v0.9.2` 起声明 `engines.dsh`（`>=0.1.2-rc.1 <0.3.0-0`），DSH 0.2.1+ 会在安装和启动时做兼容检查；若安装被拒，请升级插件版本或核对 DSH 内核版本，不要用版本豁免绕过。`v0.9.1` 未声明该字段，在 0.2.1 上仍可用，但没有安装期版本校验，也不含 `v0.9.2` 的兼容修复。
+安装后**重启 DSH**（插件是启动期加载）。若 `dsh` 提示找不到 pnpm，请先让 pnpm 进入 PATH。`v0.9.2`+ 声明 `engines.dsh`（`>=0.1.2-rc.1 <0.3.0-0`），DSH 0.2.1+ 会在安装和启动时做兼容检查；若安装被拒，请升级插件版本或核对 DSH 内核版本，不要用版本豁免绕过。`v0.9.1` 未声明该字段，在 0.2.1 上仍可用，但没有安装期版本校验，也不含 `v0.9.3` 的选择器合并与后续兼容修复。
 
 > 安装后请确认 profile 的 `package.json` 里 `dsh.profile.bundles` 已包含 `dsh-model-sync`；若没有，手动加入该条目再重启（bundle 层才会带上插件的客户端面板）。
 >
@@ -197,7 +199,7 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 - 仓库 topics 含 `dsh-plugin`，会被 dshfind、dsh-market 等社区目录自动索引（收录要求：可用 `dsh plugin add` 安装且声明 `dsh.bundle`）
 - 本包声明 `package.json#dshWorkshop`（`omdsh-workshop-package/v1`），面向 OMDSH Hub（hub.omdsh.dev）的入库与验证；验证证据见 [`docs/ecosystem.md`](docs/ecosystem.md)
 - 声明的可验证能力：命令 `/model-sync check`（只读，不写 settings）
-- 兼容基线：DSH kernel `0.2.1-rc.2`（DSH Desktop 2.0.18 已实测；DSH NEXT 2.0.19-next 仅内核层面验证），并保留 `0.2.0-rc.2`（DSH Desktop 2.0.17）与 `0.1.2-rc.1`（DSH Desktop 2.0.6）的兼容路径。稳定版仍为 `v0.9.1`。`0.2.0-rc.2` 把 settings.yaml 迁移为条目式 Config，旧的 `settings.get(ns)` 读取形态不存在；v0.5.1 起两种形态都支持。`package.json#engines.dsh` 声明 `>=0.1.2-rc.1 <0.3.0-0`，由 DSH 0.2.1+ 在安装与启动时执行；不声明 `engines.dsh` 的旧内核不施加版本约束。
+- 兼容基线：DSH kernel `0.2.1-rc.2`（DSH Desktop 2.0.18 已实测；DSH NEXT 2.0.19-next 仅内核层面验证），并保留 `0.2.0-rc.2`（DSH Desktop 2.0.17）与 `0.1.2-rc.1`（DSH Desktop 2.0.6）的兼容路径。稳定版为 `v0.9.3`。`0.2.0-rc.2` 把 settings.yaml 迁移为条目式 Config，旧的 `settings.get(ns)` 读取形态不存在；v0.5.1 起两种形态都支持。`package.json#engines.dsh` 声明 `>=0.1.2-rc.1 <0.3.0-0`，由 DSH 0.2.1+ 在安装与启动时执行；不声明 `engines.dsh` 的旧内核不施加版本约束。
 - DSH 0.2.1 起 Web/桌面端优先使用已保存的凭据，headless 只读环境变量与 `.env`；插件按新的 `credentials.describe` 语义只在来源确实只读时告警，0.2.1 的环境兜底不会再被误报为遮蔽。
 
 ## 开发

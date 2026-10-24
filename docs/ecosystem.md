@@ -67,9 +67,9 @@ dsh plugin --profile <name> add github:chen1pengvincent/dsh-model-sync-plugin#<4
 | `network:outbound` | 访问 provider `/models` 端点与 models.dev 元数据 |
 | `native-code:none` | 无原生代码、无安装脚本、无子进程 |
 
-## 0.2.1 / DSH NEXT 实测（2026-10-21）
+## 0.2.1 / DSH NEXT 实测（2026-10-21；模型选择器 2026-10-24）
 
-> 本记录不构成对 DSH NEXT 的完整兼容承诺；NEXT GUI 未验证。稳定版仍为 `v0.9.1`，`v0.9.2` 为 0.2.1/NEXT 兼容更新。
+> 本记录不构成对 DSH NEXT 的完整兼容承诺；NEXT GUI 未验证。`v0.9.3` 为当前稳定版，`v0.9.2` 为保留的 pre-release。
 
 在隔离的 `DSH_HOME` 中用 DSH Desktop 2.0.18 自带的 kernel `0.2.1-rc.2` 启动自定义 `web` profile：
 
@@ -82,6 +82,9 @@ dsh plugin --profile <name> add github:chen1pengvincent/dsh-model-sync-plugin#<4
   `nothing was installed`，未进入 pnpm 安装
 - `0.2.1` 的 credentials 实测语义：`source: 'env'` 且 `writable: true`，不再触发旧版
   「环境遮蔽」告警；只有 `writable: false` 才显示只读提示
+- 模型选择器（2026-10-24，合成 settings、无真实 Key）：composer 与 `/model` 都只显示一个
+  `OpenCode Go` / `OpenCode` 分组，未出现 `· Responses` 等协议分组；选择分流模型后触发按钮
+  正确更新，console 无 error（证明展示合并与真实路由映射同时生效）
 
 DSH NEXT 2.0.19-next 的 [package.json](https://github.com/anywhere-labs/dsh-desktop/blob/v2.0.19-next/dsh-desktop-next/package.json)
 固定依赖 `@deepseek-ai/dsh-app-boot@0.2.1-rc.2`，并复用官方插件管理器；其 GUI 未在本次自动化中单独启动，兼容判定与宿主/客户端行为以同版本内核实测为准。
