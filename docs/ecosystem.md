@@ -69,7 +69,7 @@ dsh plugin --profile <name> add github:chen1pengvincent/dsh-model-sync-plugin#<4
 
 ## DSH Desktop 2.0.18 / kernel 0.2.1 实测（2026-10-21；模型选择器 2026-10-24）
 
-> 本记录不构成对 Nextgen / Next GUI 的兼容承诺；两者未适配。`v0.9.6` 为当前稳定版，`v0.9.5` 为上一稳定版，`v0.9.2` 为保留的 pre-release。
+> 本记录不构成对 Nextgen / Next GUI 的兼容承诺；两者未适配。`v0.9.6` 为当前稳定版；`v0.9.2` 为保留的 Next GUI pre-release。旧版本 tag 已清理，仅保留版本历史说明。
 
 在隔离的 `DSH_HOME` 中用 DSH Desktop 2.0.18 自带的 kernel `0.2.1-rc.2` 启动自定义 `web` profile：
 
