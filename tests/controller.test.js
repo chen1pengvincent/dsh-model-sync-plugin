@@ -710,3 +710,76 @@ test('selection habits persist and update from explicit additions', async () => 
     harness.cleanup();
   }
 });
+
+test('check exposes full catalog with added state and safe removability', async () => {
+  const harness = makeHarness({ modelList: FULL_LIST, opencodeList: ['claude-opus-5-5', 'mimo-v2.6-flash-free', 'claude-haiku-5-5'] });
+  try {
+    const payload = await harness.controller.check();
+    const go = payload.results.find((result) => result.provider === 'opencode-go');
+    assert.ok(go.allItems.some((item) => item.id === 'kimi-k3' && item.status === 'added' && item.removable === true));
+    assert.ok(go.allItems.some((item) => item.id === 'deepseek-flash' && item.status === 'available' && item.removable === false));
+    const opencode = payload.results.find((result) => result.provider === 'opencode');
+    assert.ok(opencode.allItems.some((item) => item.id === 'claude-opus-5-5' && item.status === 'added' && item.removable === true));
+    assert.ok(opencode.allItems.some((item) => item.id === 'claude-haiku-5-5' && item.status === 'available'));
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('newly added models become removable and can be removed safely', async () => {
+  const harness = makeHarness({ modelList: FULL_LIST });
+  try {
+    await harness.controller.check();
+    const applied = await harness.controller.applySelection({ 'opencode-go': ['deepseek-flash'] });
+    assert.deepEqual(applied.errors, []);
+    const after = await harness.controller.check();
+    const go = after.results.find((result) => result.provider === 'opencode-go');
+    const added = go.allItems.find((item) => item.id === 'deepseek-flash');
+    assert.equal(added.status, 'added');
+    assert.equal(added.removable, true, 'newly added primary models are plugin-owned');
+    const removal = await harness.controller.removeManagedModels([{ provider: 'opencode-go', modelId: 'deepseek-flash' }], { recheck: false });
+    assert.equal(removal.removed, 1);
+    assert.equal(harness.document['llm-pi-ai'].providers['opencode-go'].models.some((model) => model.id === 'deepseek-flash'), false);
+    const existingRemoval = await harness.controller.removeManagedModels([{ provider: 'opencode-go', modelId: 'kimi-k3' }], { recheck: false });
+    assert.equal(existingRemoval.removed, 1, 'all added models can be removed, including pre-existing settings');
+    assert.equal(harness.document['llm-pi-ai'].providers['opencode-go'], undefined);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('sibling models are removable only after the plugin owns the route', async () => {
+  const harness = makeHarness({ modelList: FULL_LIST, opencodeList: ['claude-opus-5-5', 'mimo-v2.6-flash-free', 'claude-haiku-5-5'] });
+  try {
+    await harness.controller.check();
+    const applied = await harness.controller.applySelection({ opencode: ['claude-haiku-5-5'] });
+    assert.deepEqual(applied.errors, []);
+    const after = await harness.controller.check();
+    const opencode = after.results.find((result) => result.provider === 'opencode');
+    const added = opencode.allItems.find((item) => item.id === 'claude-haiku-5-5');
+    assert.equal(added.status, 'added');
+    assert.equal(added.removable, true, 'the plugin-created sibling owns its model');
+    const removal = await harness.controller.removeManagedModels([{ provider: 'opencode-messages', modelId: 'claude-haiku-5-5' }], { recheck: false });
+    assert.equal(removal.removed, 1);
+    assert.equal(harness.document['llm-pi-ai'].providers['opencode-messages'], undefined);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('apply uses the previous allItems snapshot and returns without a recheck', async () => {
+  const harness = makeHarness({ modelList: FULL_LIST });
+  try {
+    await harness.controller.check();
+    const beforeAt = harness.state.data.lastCheck?.at;
+    const outcome = await harness.controller.applySelection({ 'opencode-go': ['deepseek-flash'] }, { recheck: false });
+    assert.deepEqual(outcome.errors, []);
+    assert.equal(outcome.applied.length, 1);
+    assert.equal(harness.document['llm-pi-ai'].providers['opencode-go'].models.some((model) => model.id === 'deepseek-flash'), true);
+    assert.equal(harness.state.data.lastCheck?.at, beforeAt, 'recheck=false does not block on a new check');
+    assert.equal(harness.state.data.selectionHabits['opencode-go'], true);
+    assert.equal(harness.state.data.ownedModels['opencode-go'].includes('deepseek-flash'), true);
+  } finally {
+    harness.cleanup();
+  }
+});
