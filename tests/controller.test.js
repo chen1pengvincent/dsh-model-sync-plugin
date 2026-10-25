@@ -783,3 +783,24 @@ test('apply uses the previous allItems snapshot and returns without a recheck', 
     harness.cleanup();
   }
 });
+
+test('tracks provider update times and panel-open time', async () => {
+  const harness = makeHarness({ modelList: FULL_LIST });
+  try {
+    assert.equal(harness.controller.status().lastOpenedAt, 0);
+    assert.equal(harness.controller.markOpened(), 0);
+    assert.ok(harness.controller.status().lastOpenedAt > 0);
+
+    await harness.controller.check();
+    const updates = harness.controller.status().providerUpdates;
+    assert.ok(updates['opencode-go'] > 0, 'first discovery of new models records an update');
+    const first = updates['opencode-go'];
+    await harness.controller.check();
+    assert.equal(harness.controller.status().providerUpdates['opencode-go'], first, 'unchanged new items do not bump the timestamp');
+    await harness.controller.applySelection({ 'opencode-go': ['deepseek-flash'] });
+    await harness.controller.check();
+    assert.equal(harness.controller.status().providerUpdates['opencode-go'], first, 'adding a model does not create a new update');
+  } finally {
+    harness.cleanup();
+  }
+});

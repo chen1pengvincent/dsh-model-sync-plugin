@@ -10,8 +10,9 @@
 
 | 版本 | 定位 | 建议 |
 |---|---|---|
-| `v0.9.5` | **当前稳定版** | DSH Desktop 2.0.18 / kernel `0.2.1-rc.2` 已验证 |
-| `v0.9.4` | 上一稳定版 | 回退用 |
+| `v0.9.6` | **当前稳定版** | DSH Desktop 2.0.18 / kernel `0.2.1-rc.2` 已验证 |
+| `v0.9.5` | 上一稳定版 | 回退用 |
+| `v0.9.4` | 旧稳定版 | 回退用 |
 | `v0.9.1` | 旧内核回退版 | DSH Desktop ≤2.0.17 / kernel 0.2.0 |
 
 **已实测**：DSH Desktop 2.0.18，kernel `0.2.1-rc.2`。
@@ -31,7 +32,6 @@
 - **搜索与筛选**：按模型 id/名称搜索，支持 `全部 / 未添加 / 已添加`。
 - **快捷操作**：卡片内提供「全选」和「清空」。全选作用于当前筛选结果中的未添加模型；清空同时清除新增选择和待移除标记。
 - **维护与诊断**：最近一次检查发现的下架模型、无法判定协议的模型、检查失败、协议修正、检查范围和上次添加记录，收在每张卡片的折叠区；主列表不主动展示这些信息。
-- **记录添加习惯**：用户添加过某个服务商后，下次检查会按上次习惯预选该服务商的新模型，并提示「以后不再预选」。
 - **命令**：`/model-sync check` 只读检查；`/model-sync status` 查看上次结果。
 - **OpenCode 会话头**：为 OpenCode / OpenCode Go 路由按会话附带 `x-opencode-session`。
 - **写前备份**：写入 settings 前尝试备份 `settings.yaml`（文件不存在时跳过）。
@@ -42,10 +42,10 @@
 
 ```bash
 # 当前稳定版
-dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin#v0.9.5
+dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin#v0.9.6
 
 # 上一稳定版（回退）
-dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin#v0.9.4
+dsh plugin --profile desktop add github:chen1pengvincent/dsh-model-sync-plugin#v0.9.5
 ```
 
 或使用本地路径：
@@ -64,8 +64,8 @@ dsh plugin --profile desktop add /path/to/dsh-model-sync-plugin
 
 1. 点「检查更新」获取各 provider 当前模型。
 2. 展开服务商卡片，搜索或按厂商分组浏览。
-3. 勾选未添加模型、取消勾选已添加模型；可点「全选 / 清空」快速操作。
-4. 点「保存变更」，卡片保持展开并显示 Toast；列表在后台同步。
+3. 勾选未添加模型、取消勾选已添加模型；可点卡片内「全选 / 清空」快速操作。
+4. 滚到列表底部点「保存全部变更」，卡片保持展开并显示 Toast；列表在后台同步。
 
 ### 关于「无法添加」和「已下架」
 
@@ -116,7 +116,7 @@ OpenCode / OpenCode Go 要求每个推理请求携带按会话稳定的 `x-openc
 
 | 路径 | 说明 |
 |---|---|
-| `$DSH_HOME/model-sync/state.json` | 上次检查/应用、纳管开关、sibling 账本、添加习惯、插件添加模型账本 |
+| `$DSH_HOME/model-sync/state.json` | 上次检查/应用、纳管开关、sibling 账本、插件添加模型账本、面板打开时间与各服务商最近更新时间 |
 | `$DSH_HOME/model-sync/models.dev.json` | models.dev 元数据缓存（24h TTL，用于协议分类与厂商识别） |
 | `$DSH_HOME/model-sync/backups/` | settings.yaml 写前备份（最近 20 份；文件不存在时跳过） |
 

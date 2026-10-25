@@ -69,7 +69,7 @@ dsh plugin --profile <name> add github:chen1pengvincent/dsh-model-sync-plugin#<4
 
 ## DSH Desktop 2.0.18 / kernel 0.2.1 实测（2026-10-21；模型选择器 2026-10-24）
 
-> 本记录不构成对 Nextgen / Next GUI 的兼容承诺；两者未适配。`v0.9.5` 为当前稳定版，`v0.9.4` 为上一稳定版，`v0.9.2` 为保留的 pre-release。
+> 本记录不构成对 Nextgen / Next GUI 的兼容承诺；两者未适配。`v0.9.6` 为当前稳定版，`v0.9.5` 为上一稳定版，`v0.9.2` 为保留的 pre-release。
 
 在隔离的 `DSH_HOME` 中用 DSH Desktop 2.0.18 自带的 kernel `0.2.1-rc.2` 启动自定义 `web` profile：
 
@@ -85,11 +85,13 @@ dsh plugin --profile <name> add github:chen1pengvincent/dsh-model-sync-plugin#<4
 - 模型选择器（2026-10-24，合成 settings、无真实 Key）：composer 与 `/model` 都只显示一个
   `OpenCode Go` / `OpenCode` 分组，未出现 `· Responses` 等协议分组；选择分流模型后触发按钮
   正确更新，console 无 error（证明展示合并与真实路由映射同时生效）
-- 新模型更新面板（2026-10-25，真实 provider 配置/合成 state）：默认不勾选；provider 卡片单列；
+- 新模型更新面板（2026-10-25，真实 provider 配置/合成 state）：默认不勾选；provider 卡片单列、
+  固定顺序、不分成待添加/已是最新；卡片显示自上次打开后的「有更新 · 时间」标识；
   展开后展示服务商当前可用的全量模型，区分已添加/未添加；无法添加和最近一次下架只在卡片内部
   「维护与诊断」显示；按厂商分组，支持搜索、`全部/未添加/已添加` 筛选、厂商组三态勾选、
-  卡片内全选/清空，厂商组使用多列瀑布流；已添加模型可取消勾选并保存移除；添加后保留展开并
-  显示 Toast；console 无 error
+  卡片内全选/清空，厂商组使用多列瀑布流；已添加模型可取消勾选并在列表底部「保存全部变更」
+  统一保存移除；不分成待添加/已是最新，卡片保留固定顺序与「有更新」时间标识；添加后保留展开
+  并显示 Toast；console 无 error
 - 模型选择器回归（2026-10-25）：新面板上线后 composer 与 `/model` 仍按服务商合并，无协议分组
 
 ## 已知环境问题（历史）
