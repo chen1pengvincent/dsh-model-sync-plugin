@@ -135,8 +135,10 @@ test('check is read-only and lists new models with placement', async () => {
       ['minimax-m3', 'opencode-go-messages'],
       ['gpt-5.6-luna', 'opencode-go-responses'],
     ]);
+    assert.deepEqual(go.newItems.map((item) => item.vendor), ['DeepSeek', 'MiniMax', 'OpenAI']);
     const ds = payload.results.find((result) => result.provider === 'deepseek-official');
     assert.deepEqual(ds.newItems.map((item) => item.id), ['deepseek-flash']);
+    assert.equal(ds.newItems[0].vendor, 'DeepSeek');
     assert.deepEqual(harness.state.data.lastCheck.results.find((r) => r.provider === 'opencode-go').newItems[0].entry, undefined, 'entries are stripped from state');
   } finally {
     harness.cleanup();
@@ -155,6 +157,7 @@ test('openrouter lists but preselects nothing; kimi is preselected; managed togg
     assert.equal(kimi.status, 'ok');
     assert.equal(kimi.defaultSelected, true);
     assert.deepEqual(kimi.newItems.map((item) => item.id), ['k3']);
+    assert.equal(kimi.newItems[0].vendor, 'Moonshot AI');
     assert.equal(harness.controller.status().managed.openrouter, true);
 
     harness.controller.setManaged('openrouter', false);
@@ -681,6 +684,29 @@ test('repairs never drain the main route below one model', async () => {
     assert.deepEqual(providers['opencode-go'].models.map((model) => model.id), ['minimax-m3']);
   } finally {
     await settle(harness.controller);
+    harness.cleanup();
+  }
+});
+
+
+test('selection habits persist and update from explicit additions', async () => {
+  const harness = makeHarness({ modelList: FULL_LIST });
+  try {
+    assert.deepEqual(harness.controller.status().selectionHabits, {});
+    harness.controller.setSelectionHabit('opencode-go', true);
+    assert.equal(harness.controller.status().selectionHabits['opencode-go'], true);
+    harness.controller.setSelectionHabit('opencode-go', false);
+    assert.equal(harness.controller.status().selectionHabits['opencode-go'], undefined);
+
+    await harness.controller.check();
+    const outcome = await harness.controller.applySelection({ 'opencode-go': ['deepseek-flash'] });
+    assert.deepEqual(outcome.errors, []);
+    const habits = harness.controller.status().selectionHabits;
+    assert.equal(habits['opencode-go'], true);
+    assert.equal(habits['deepseek-official'], undefined, 'not selected providers are not remembered');
+    const reloaded = new SyncState(harness.state.dir);
+    assert.equal(reloaded.selectionHabit('opencode-go'), true, 'habit survives a state reload');
+  } finally {
     harness.cleanup();
   }
 });

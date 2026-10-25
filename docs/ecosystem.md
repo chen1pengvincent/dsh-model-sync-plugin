@@ -69,13 +69,13 @@ dsh plugin --profile <name> add github:chen1pengvincent/dsh-model-sync-plugin#<4
 
 ## 0.2.1 / DSH NEXT 实测（2026-10-21；模型选择器 2026-10-24）
 
-> 本记录不构成对 DSH NEXT 的完整兼容承诺；NEXT GUI 未验证。`v0.9.3` 为当前稳定版，`v0.9.2` 为保留的 pre-release。
+> 本记录不构成对 DSH NEXT 的完整兼容承诺；NEXT GUI 未验证。`v0.9.4` 为当前稳定版，`v0.9.3` 为上一稳定版，`v0.9.2` 为保留的 pre-release。
 
 在隔离的 `DSH_HOME` 中用 DSH Desktop 2.0.18 自带的 kernel `0.2.1-rc.2` 启动自定义 `web` profile：
 
 - `dsh --profile nextweb --dump-config` 组合出 `- id: dsh-model-sync` 行
 - 宿主启动后 `GET /model-sync/api/state` 返回 200，`/model-sync` 命令注册成功
-- 无头 Chromium 打开 Web UI：设置导航出现「模型更新」，面板渲染出「检查更新 / 添加所选」；
+- 无头 Chromium 打开 Web UI：设置导航出现「模型更新」，面板默认收起服务商卡片，显示「检查更新 / 添加 N 个模型」；
   console 无 error / exception
 - `evaluatePluginCompatibility(manifest, {}, '0.2.1-rc.2')` 返回 `undefined`（满足 `engines.dsh`）
 - 负向对照：临时副本把 `engines.dsh` 改为 `>=9.0.0` 后执行 `dsh plugin add`，预检拒绝并输出
@@ -85,6 +85,10 @@ dsh plugin --profile <name> add github:chen1pengvincent/dsh-model-sync-plugin#<4
 - 模型选择器（2026-10-24，合成 settings、无真实 Key）：composer 与 `/model` 都只显示一个
   `OpenCode Go` / `OpenCode` 分组，未出现 `· Responses` 等协议分组；选择分流模型后触发按钮
   正确更新，console 无 error（证明展示合并与真实路由映射同时生效）
+- 新模型更新面板（2026-10-25，真实 provider 配置/合成 state）：默认不勾选；provider 卡片两列，
+  展开后按厂商分组、支持搜索/全部/未选/已选筛选和厂商组三态勾选；下架/跳过/技术详情只在卡片
+  内部「维护与诊断」显示；添加习惯可预选并清除；console 无 error
+- 模型选择器回归（2026-10-25）：新面板上线后 composer 与 `/model` 仍按服务商合并，无协议分组
 
 DSH NEXT 2.0.19-next 的 [package.json](https://github.com/anywhere-labs/dsh-desktop/blob/v2.0.19-next/dsh-desktop-next/package.json)
 固定依赖 `@deepseek-ai/dsh-app-boot@0.2.1-rc.2`，并复用官方插件管理器；其 GUI 未在本次自动化中单独启动，兼容判定与宿主/客户端行为以同版本内核实测为准。

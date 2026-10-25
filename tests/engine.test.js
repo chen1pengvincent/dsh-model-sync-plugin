@@ -19,6 +19,7 @@ import {
   siblingName,
   stableStringify,
   targetProvider,
+  vendorForModel,
 } from '../lib/engine.js';
 import { BUILTIN_ROUTES } from '../lib/routes.js';
 
@@ -259,4 +260,26 @@ test('planRouteChanges on a siblingOnly route never writes the catalog provider 
 test('claude compat rule only applies to 5.x claude models', () => {
   const entry = buildPiAiEntry({ id: 'claude-fable-5-1' }, undefined, undefined, OPENCODE_ROUTE, 'anthropic-messages');
   assert.deepEqual(entry, { id: 'claude-fable-5-1' });
+});
+
+
+test('vendorForModel prefers known publishers and falls back safely', () => {
+  const index = buildModelsDevIndex({
+    anthropic: { name: 'Anthropic', models: { 'claude-opus-5-5': {} } },
+    openai: { name: 'OpenAI', models: { 'gpt-6': {} } },
+    openrouter: { name: 'OpenRouter', models: { 'openai/gpt-6': {}, 'acme/new-model': {} } },
+    opencode: { name: 'OpenCode', models: { 'deepseek-v4.1-flash-free': {}, 'space-bunny-free': {} } },
+  });
+  assert.deepEqual(vendorForModel(index, 'claude-opus-5-5'), { vendorId: 'anthropic', vendor: 'Anthropic' });
+  assert.deepEqual(vendorForModel(index, 'openai/gpt-6'), { vendorId: 'openai', vendor: 'OpenAI' });
+  assert.deepEqual(vendorForModel(index, 'deepseek-v4.1-flash-free'), { vendorId: 'deepseek', vendor: 'DeepSeek' });
+  assert.deepEqual(vendorForModel(index, 'space-bunny-free'), { vendorId: 'other', vendor: '其他' });
+  const ambiguous = buildModelsDevIndex({
+    alibaba: { name: 'Alibaba', models: { 'kimi-k3': {} } },
+    moonshotai: { name: 'Moonshot AI', models: { 'kimi-k3': {} } },
+  });
+  assert.deepEqual(vendorForModel(ambiguous, 'kimi-k3'), { vendorId: 'moonshotai', vendor: 'Moonshot AI' });
+  assert.deepEqual(vendorForModel(index, 'acme/new-model'), { vendorId: 'other', vendor: '其他' });
+  assert.deepEqual(vendorForModel(buildModelsDevIndex({}), 'claude-opus-5-5'), { vendorId: 'anthropic', vendor: 'Anthropic' });
+  assert.deepEqual(vendorForModel(index, 'k3', { vendorId: 'moonshotai', vendor: 'Moonshot AI' }), { vendorId: 'moonshotai', vendor: 'Moonshot AI' });
 });
