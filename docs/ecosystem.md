@@ -1,100 +1,80 @@
-# 生态接入与验证证据（Ecosystem evidence）
+# 接入与验证证据
 
-本文件是 `package.json#dshWorkshop.evidence` 指向的证据说明：记录本插件作为
-**Profile Bundle** 插件接入 DSH 时，安装、失败隔离、生命周期与移除四项事实的
-验证方式与观察结果。当前事实范围：**DSH kernel `0.2.1-rc.2`（DSH Desktop 2.0.18）**；
-`0.2.0-rc.2` 与 `0.1.2-rc.1` 为保留的历史兼容路径。**Nextgen / Next GUI 未适配，不纳入兼容承诺。**
+本文件对应 `package.json#dshWorkshop.evidence`。区分当前版本的自动化证据、当前 DSH 实机观察和历史记录，不把兼容声明、mock 测试或旧版本截图当成新版本实测。
 
-## 安装（install）
+## 当前范围
 
-```bash
-dsh plugin --profile <name> add github:chen1pengvincent/dsh-model-sync-plugin#<40位commit>
+- 插件工作版本：`0.11.0`；当前宿主 kernel：`0.2.2-rc.1`。
+- 声明兼容范围：`>=0.2.2-rc.1 <0.3.0-0`。未承诺旧 kernel 或另一套 Next GUI 的兼容性。
+- 供应商从公开 `llm.listConfigurableProviders()` 和各实例精确的 settings namespace/path 发现；调用凭据通过 Host credentials 服务解析。
+- 官方目录与 DSH SDK 静态模型表分开。八家具体来源、区域、产品路径和限制见 [README](../README.md#八家官方平台)。智谱公开 schema 不等于账户可用性验证；旧 Llama API 不会被自动迁移。
+
+## 安装与生命周期
+
+使用当前 profile 的官方插件管理入口；本地开发安装示例：
+
+```json
+{"action":"install_bundle","target":"/absolute/path/to/dsh-model-sync-plugin"}
 ```
 
-- 本包无 `install` / `postinstall` 等安装脚本（`installScriptsMustRemainDisabled: true` 成立）
-- 安装后 `dsh.profile.bundles` 需包含 `dsh-model-sync`；重启 DSH 加载宿主与客户端
-- DSH 0.2.1+ 在安装与启动时读取 `package.json#engines.dsh`（`>=0.1.2-rc.1 <0.3.0-0`）；
-  Nextgen / Next GUI 未适配；安装与兼容声明只覆盖稳定 DSH Desktop
-- 观察：宿主日志出现 `dsh-model-sync: update check complete …`；会话内 `/model-sync status`
-  返回结果；设置 → 「模型更新」出现面板
+- 不直接编辑 profile 的清单、依赖或补丁，不在 profile 目录运行包管理器。
+- 无 install/postinstall 安装脚本，无新增运行时依赖。
+- 以安装返回的 `application`、`warnings`、`nextStep` 判断是否热应用，不能仅凭安装成功或 manifest 声明声称界面已更新。
+- Host 定时器、事件监听、命令和 HTTP 路由注册均有生命周期清理。停止后的在途检查不能提交目录快照或配置。
+- 配置、模型目录和凭据事件触发重新发现；启动检查只读取供应商目录并写插件自身状态，不写模型设置。
+- 卸载通过官方插件管理执行；不自动删除已保存的模型或插件状态，以免破坏用户配置。
 
-## 能力验证（capability）
+## 自动化验证
 
-- 能力：命令 `/model-sync check`（`kind: command`）
-- 调用：在任意会话运行 `/model-sync check`
-- 预期观察：返回每个 provider 的新模型数量（`无新增` / `N 个新模型` / `未纳入检查` /
-  `检查失败（原因）`），且**不写入** settings
-- 对照检查：调用前后 settings 文档不变。DSH 2.0.17+ 的设置已迁入 profile 的
-  `cordis.patch.yml`（不再有 `~/.dsh/settings.yaml`），因此比较该文件与 profile
-  `package.json` 的哈希即可；`check` 只写自己的 `$DSH_HOME/model-sync/`（状态与 models.dev 缓存），
-  不写 settings
+执行：
 
-## 失败隔离（failureIsolation）
+```bash
+node --test
+node --check lib/index.js
+node --check lib/client.js
+```
 
-- 上游不可达 / 返回非 JSON / 空列表：该 provider 标记为「检查失败」，其余 provider 继续；
-  settings 不被修改
-- 启动检查失败：只写 `warn` 日志，插件继续运行
-- 写入失败（DSH schema 或 `assertServiceable` 拒绝）：`ctx.settings.mutate` 抛出，
-  该路由记录错误，其余路由不受影响；settings 文档保持最后一次成功状态
-- 安装失败：由 DSH/Pnpm 的 Profile Bundle 事务回滚（`generation-rollback`）；
-  本插件不在安装期触碰 current generation
-- 状态文件损坏：自动备份为 `.corrupt-<ts>` 后重建，不阻塞 DSH 启动
+### 已纳入的回归边界
 
-## 生命周期（hotReload / restart）
+1. **发现**：动态供应商、同品牌多个实例、精确 namespace/path、端点而非名称识别、配置与凭据作用域隔离。
+2. **官方目录**：八家适配、区域和产品区分、分页完整性、禁止重定向、坏行/重复/空目录/超时/HTTP 失败保留最后有效快照、schema 与账户列表区分。
+3. **变化与已读**：首次发现建立基线；相对上次查看的净新增/移除；重复检查不累计；R 的确认不清除 R+1；过期历史版本不误确认；已启用新模型仍可标新。
+4. **前端**：首次完整展开确认精确版本；当前展开期间新增标签稳定；已读确认失败保留标签并重试；部分保存和网络异常保留未成功草稿；不把配置写入成功后的刷新警告报成保存失败。
+5. **保存**：原配置版本 CAS；备份后的凭据/配置/目录/纳管状态再验证；保留手工元数据和协议；只移除明确归属的模型；不通过空模型数组意外恢复 SDK 默认值；不同 namespace 部分成功准确回执。
+6. **状态并发**：稳定 HMAC 盐、短时跨进程锁、三方差量合并、同键冲突、已读版本不回退；含两个独立 OS 进程的状态写入回归。
+7. **输入与信息安全**：JSON 对象与 64 KiB 上限、严格布尔值、显式 expectedRevisions、精确 owner、安全错误输出、凭据不返回 Client。
+8. **历史能力**：OpenCode sibling 分组、会话标头、旧路由显式管理、只读命令。
 
-- 宿主插件代码在 `restart-profile` 时加载（lifecycle 声明）
-- 运行期通过 `ctx.settings.mutate` 写入的 provider/模型配置由 DSH 热解析，无需重启
-- 客户端面板随 DSH 客户端模块加载；面板内操作即时生效
-- `dispose: supported`：定时器、`webServer` 路由、命令注册均在 cordis effect 中注册清理
+最终全量 `node --test`：**324 项全部通过，0 失败、0 跳过**（2026-11-12，3396.57 ms）。`git diff --check`、核心模块语法检查与 `npm pack --dry-run --json` 通过；分发包 20 个文件（85149 字节打包 / 288880 字节解包），包含图标和中英文 locale，不包含测试和凭据。覆盖隐式原生协议保留、显式连接配置保留、模型保存后未读基线不重置，以及不适用模型过滤、重复日期快照折叠、OpenAI 显式协议写入、DeepSeek Account 排除、单厂商双列网格与自然排序。受控响应不能证明八家真实账户都已经通过鉴权和模型调用。
 
-## 移除（remove）
+对抗审查后补充的回归覆盖：原生目录路由只继承目录时，新增模型会先物化当前生效目录再追加，不会用一条新模型替换整份目录；仅写入 sibling 的保存不会把主路由的继承目录钉死；`modelOverrides` 在保存时迁移到条目并清空块，且只有主路由 models 真正被重写时才清空，避免无写入时丢手工字段；官方公开 schema（智谱）的目录基线不绑定凭据，轮换 key 不会重放全部新增；sibling 归属还要求凭据绑定一致，同传输但自有 key 的用户路由不被隐藏；首次展开前发生的目录变化仍计数并打标；仅同名但端点不同的用户路由不再被当成插件自建 sibling 隐藏；内置路由未声明 defaultBaseURL 时按官方路由表回退（DeepSeek 原生、OpenCode 等），用户自定义 baseURL 不被替换。协议修正建议仍只展示、不自动应用（结构性移动需要用户另行确认）。0.11.0 新增：非对话/重复日期快照/协议未知行不进入主列表与未读基线，只在诊断里计数；OpenAI SDK 未收录的聊天模型在选择保存时写入供应商级 `api: openai-responses` 并提示协议变更；DeepSeek Account 不再发现或展示；单厂商官方供应商使用双列网格并按显示名自然排序，多厂商网关保留分组卡片。日期快照折叠同时覆盖 `-YYYY-MM-DD`、`-YYYYMMDD` 与 `-preview-MM-DD` 三种形态，且别名必须在上游存在且可选；自定义命名的 OpenAI 路由（如 `openai-work` 指向 api.openai.com）会回退到厂商标准 SDK 目录判断模型是否已知，避免把已知模型误标为需写协议；单厂商网格固定两列，自然排序在 200 行显示上限之前执行。
 
-1. 从 profile 的 `package.json` 移除依赖 `dsh-model-sync`，并从 `dsh.profile.bundles` 移除同名条目
-2. 在 profile 目录执行 `pnpm remove dsh-model-sync`（或重新 `pnpm install`）
-3. 重启 DSH
+## 实机验证与限制
 
-- 观察：`/model-sync` 命令消失、「模型更新」面板消失；DSH 其余功能正常
-- 残留物：`$DSH_HOME/model-sync/`（状态、models.dev 缓存、settings 备份；默认 `~/.dsh`）与已添加的模型条目；
-  两者都可由用户手动清理，删除后不影响 DSH
+当前 DSH Desktop 可通过辅助功能读取真实已认证界面。直接打开当前 Web URL 的新浏览器标签返回认证要求；未搜索或绕过认证令牌，也未建立替代服务器或 mock 预览来冒充当前页面。
 
-## 权限对照（permissions）
+安装记录：profile 中原 GitHub 0.9.6 已先移除，再以工作区 link 安装 **0.11.0**（`application: applied`，warnings 为空）；Host 与 Client 均加载（`settings.section` 的 `model-sync`、`settings.models.provider-card` 的 `llm-pi-ai` occupant 可见）。实机 `POST /model-sync/api/check` 只验证了当前 profile 实际配置的供应商：OpenAI 官方目录 96、DeepSeek 官方目录 2、Kimi Coding 回退 models.dev 6、OpenCode 40、OpenCode Go 20、OpenRouter 432；未配置 Anthropic、Gemini、Grok、智谱、Meta 账户，因此这些品牌的真实鉴权与调用仍属未验证限制。界面视觉验收（图标、展开/折叠、标签渲染）未完成：Client 模块与入口注册已确认，但未取得可认证的界面截图，不能声称已目视通过。
 
-| 声明 | 用途 |
+**原生编辑器旧删除入口的限制**：该入口保留用户勾选时的配置版本。如果原生编辑器先保存并增加同 namespace 版本，后续删除会安全地被 CAS 拒绝；不能自动刷新版本后重放删除。界面引导到「设置 → 模型更新」重新检查、重新勾选，由该面板统一保存。模拟 portal/MutationObserver/save-close 测试不证明原生编辑器实际版本行为，不能声称此限制已消除。
+
+## 对抗式验证说明
+
+使用独立测试生成与故障/并发注入覆盖反例，不只验证正常路径。仓库没有 `.smartcr` 规则库，且用户未选择正式 SmartCR 的无规则降级方式，因此**没有运行或宣称完成正式 SmartCR 流程**；独立对抗测试与正式流程明确分开。
+
+## 权限与数据
+
+| 权限/数据 | 实际用途和边界 |
 |---|---|
-| `settings:read` | 读取 `llm-deepseek` / `llm-pi-ai` 配置以计算差异 |
-| `settings:write` | 仅在用户于面板勾选并点击「添加所选」后写入；写前自动备份 settings |
-| `credentials:read` | 通过 `ctx.credentials.resolve` 在请求时解析 provider API key，通过 `describe` 读取只读元数据；不落盘、不打印 |
-| `network:outbound` | 访问 provider `/models` 端点与 models.dev 元数据 |
-| `native-code:none` | 无原生代码、无安装脚本、无子进程 |
+| settings 读取 | 读取精确实例配置与版本；静态 SDK 模型仅作为本地现状。 |
+| settings 写入 | 仅明确保存；先取得实际配置文档并备份，再做版本及作用域验证、CAS 写入。 |
+| credentials 读取 | Host 请求时解析；不打印、不保存 key、不向 Client 暴露；官方文档请求不带账户鉴权。 |
+| network outbound | 匹配的官方目录及智谱官方公开 schema；历史路由及 models.dev 元数据兼容。 |
+| 本地状态 | 当前 profile 的 `profileContext.dir/model-sync`；无 profile context 才使用 `$DSH_HOME/model-sync`。 |
+| 备份 | 实际配置文档可能含敏感信息，备份文件权限为 `0600`；索引仅记录最近 20 个路径，不代表自动删除旧备份。 |
+| 运行机制 | 无原生代码、无安装脚本；测试可启动受控 Node 子进程，生产插件不启动子进程。 |
 
-## DSH Desktop 2.0.18 / kernel 0.2.1 实测（2026-10-21；模型选择器 2026-10-24）
+状态锁超过 120ms 返回忙；不会自动抢占遗留锁。设置服务的 CAS 由宿主提供，不对宿主之外的任意写文件行为作跨进程原子性承诺。
 
-> 本记录不构成对 Nextgen / Next GUI 的兼容承诺；两者未适配。`v0.9.6` 为当前稳定版；`v0.9.2` 为保留的 Next GUI pre-release。旧版本 tag 已清理，仅保留版本历史说明。
+## 历史证据（不是 0.11.0 验收）
 
-在隔离的 `DSH_HOME` 中用 DSH Desktop 2.0.18 自带的 kernel `0.2.1-rc.2` 启动自定义 `web` profile：
-
-- `dsh --profile nextweb --dump-config` 组合出 `- id: dsh-model-sync` 行
-- 宿主启动后 `GET /model-sync/api/state` 返回 200，`/model-sync` 命令注册成功
-- 无头 Chromium 打开 Web UI：设置导航出现「模型更新」，面板默认收起服务商卡片，显示「检查更新 / 添加 N 个模型」；
-  console 无 error / exception
-- `evaluatePluginCompatibility(manifest, {}, '0.2.1-rc.2')` 返回 `undefined`（满足 `engines.dsh`）
-- 负向对照：临时副本把 `engines.dsh` 改为 `>=9.0.0` 后执行 `dsh plugin add`，预检拒绝并输出
-  `nothing was installed`，未进入 pnpm 安装
-- `0.2.1` 的 credentials 实测语义：`source: 'env'` 且 `writable: true`，不再触发旧版
-  「环境遮蔽」告警；只有 `writable: false` 才显示只读提示
-- 模型选择器（2026-10-24，合成 settings、无真实 Key）：composer 与 `/model` 都只显示一个
-  `OpenCode Go` / `OpenCode` 分组，未出现 `· Responses` 等协议分组；选择分流模型后触发按钮
-  正确更新，console 无 error（证明展示合并与真实路由映射同时生效）
-- 新模型更新面板（2026-10-25，真实 provider 配置/合成 state）：默认不勾选；provider 卡片单列、
-  固定顺序、不分成待添加/已是最新；卡片显示自上次打开后的「有更新 · 时间」标识；
-  展开后展示服务商当前可用的全量模型，区分已添加/未添加；无法添加和最近一次下架只在卡片内部
-  「维护与诊断」显示；按厂商分组，支持搜索、`全部/未添加/已添加` 筛选、厂商组三态勾选、
-  卡片内全选/清空，厂商组使用多列瀑布流；已添加模型可取消勾选并在列表底部「保存全部变更」
-  统一保存移除；不分成待添加/已是最新，卡片保留固定顺序与「有更新」时间标识；添加后保留展开
-  并显示 Toast；console 无 error
-- 模型选择器回归（2026-10-25）：新面板上线后 composer 与 `/model` 仍按服务商合并，无协议分组
-
-## 已知环境问题（历史）
-
-DSH Desktop 2.0.6 存在与插件无关的官方路由缺陷（`DeepSeek request extension preparation failed`），
-规避方式见 README「已知问题与排查」；该问题已在后续内核修复。
+保留旧文档中的事实范围：2026-10-21 在隔离 DSH_HOME、Desktop 2.0.18/kernel 0.2.1-rc.2 中验证过旧插件安装、命令/API、设置入口和无头 Chromium；2026-10-24 验证过旧版 OpenCode 模型分组；2026-10-25 验证过旧版面板及模型选择器。旧版声称 console 无 error、兼容预检能拒绝不支持版本，这些均不是本次重新执行的结果。

@@ -1,15 +1,25 @@
 {
   "name": "dsh-model-sync",
-  "version": "0.9.6",
+  "version": "0.11.0",
   "private": true,
-  "description": "DSH 模型插件：监控各服务商上游 /models，列出新增模型并勾选添加（检查只读、显式应用、不自动删除），并为 OpenCode / OpenCode Go 路由按会话附带 x-opencode-session。Monitor provider model catalogs, add newly released models to DeepSeek Harness, and fix OpenCode's 400 MissingSessionID.",
+  "description": "动态发现 DSH 官方模型供应商，查看目录未读新增/移除，显式勾选保存；保护手工配置并保留 OpenCode 协议分流与会话标头支持。Discover configured official providers, track unread catalog changes, and explicitly select models for DeepSeek Harness.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
+    "./icon": "./assets/icon.svg",
+    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
+  "files": [
+    "lib",
+    "assets",
+    "locale",
+    "cordis.patch.yml",
+    "README.md",
+    "docs"
+  ],
   "scripts": {
     "test": "node --test"
   },
@@ -22,13 +32,14 @@
     "deepseek-harness",
     "plugin",
     "model-sync",
-    "opencode",
-    "openrouter",
-    "deepseek"
+    "openai",
+    "anthropic",
+    "deepseek",
+    "opencode"
   ],
   "license": "MIT",
   "engines": {
-    "dsh": ">=0.1.2-rc.1 <0.3.0-0"
+    "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "dsh": {
     "client": {
@@ -67,16 +78,14 @@
     ],
     "compatibility": {
       "dshVersions": [
-        "0.1.2-rc.1",
-        "0.2.0-rc.2",
-        "0.2.1-rc.2"
+        "0.2.2-rc.1"
       ]
     },
     "capability": {
       "id": "model-sync",
       "kind": "command",
       "invocation": "/model-sync check",
-      "expected": "returns a read-only per-provider list of newly advertised models and protocol-repair counts, without writing settings"
+      "expected": "returns read-only per-instance official catalog status, unread added/removed/change counts, and separately available selections; never writes model settings"
     },
     "evidence": {
       "install": "docs/ecosystem.md",

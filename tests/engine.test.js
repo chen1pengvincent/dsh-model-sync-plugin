@@ -88,14 +88,30 @@ test('detectRouteRepairs moves misplaced models back without touching correct on
   assert.deepEqual(repairs.map((repair) => [repair.id, repair.from, repair.to]), [['minimax-m3', 'opencode-go', 'opencode-go-messages']]);
 });
 
-test('planRouteChanges writes route api+baseURL on single-protocol routes too', () => {
+test('planRouteChanges preserves implicit native transport on model-only saves', () => {
   const route = BUILTIN_ROUTES.openrouter;
   const profiles = { openrouter: { apiKeyEnv: 'OPENROUTER_API_KEY', models: [] } };
-  const additions = [{ id: 'anthropic/claude-opus-5-fast', api: 'openai-completions', target: 'openrouter', entry: { id: 'anthropic/claude-opus-5-fast', name: 'Claude Opus 5 (Fast)' } }];
+  const entry = { id: 'anthropic/claude-opus-5-fast', name: 'Claude Opus 5 (Fast)' };
+  const additions = [{ id: entry.id, api: 'openai-completions', target: 'openrouter', entry }];
   const planned = planRouteChanges(route, profiles, { additions, repairs: [] }, 'OPENROUTER_API_KEY');
-  assert.ok(planned.operations.some((op) => op.op === 'set' && op.path.join('.') === 'providers.openrouter.api' && op.value === 'openai-completions'));
-  assert.ok(planned.operations.some((op) => op.op === 'set' && op.path.join('.') === 'providers.openrouter.baseURL' && op.value === 'https://openrouter.ai/api/v1'));
+  assert.deepEqual(planned.operations, [{ op: 'set', path: ['providers', 'openrouter', 'models'], value: [entry] }]);
   assert.deepEqual(planned.createdSiblings, []);
+});
+
+test('planRouteChanges preserves explicit connection settings on main and owned siblings', () => {
+  const profiles = {
+    'opencode-go': { api: 'openai-responses', baseURL: 'https://opencode.ai/go/v1', headers: { 'x-custom': 'keep' }, models: [{ id: 'kimi-k3' }] },
+    'opencode-go-messages': { api: 'anthropic-messages', baseURL: 'https://opencode.ai/go/custom', apiKeyEnv: 'CUSTOM_KEY', models: [{ id: 'minimax-m2' }] },
+  };
+  const before = structuredClone(profiles);
+  const additions = [
+    { id: 'deepseek-flash', api: 'openai-completions', target: 'opencode-go', entry: { id: 'deepseek-flash' } },
+    { id: 'minimax-m3', api: 'anthropic-messages', target: 'opencode-go-messages', entry: { id: 'minimax-m3' } },
+  ];
+  const planned = planRouteChanges(ROUTE, profiles, { additions, repairs: [] }, 'OPENCODE_GO_API_KEY', ['opencode-go-messages']);
+  assert.deepEqual(planned.operations.map((op) => op.path), [['providers', 'opencode-go', 'models'], ['providers', 'opencode-go-messages', 'models']]);
+  assert.deepEqual(profiles, before);
+  assert.deepEqual(planRouteChanges(ROUTE, profiles, {}, 'OPENCODE_GO_API_KEY', ['opencode-go-messages']).operations, []);
 });
 
 test('planRouteChanges appends selected additions and creates siblings', () => {
@@ -108,7 +124,8 @@ test('planRouteChanges appends selected additions and creates siblings', () => {
   const main = planned.operations.find((op) => op.op === 'set' && op.path.join('.') === 'providers.opencode-go.models');
   assert.deepEqual(main.value.map((model) => model.id), ['kimi-k3', 'deepseek-flash']);
   assert.ok(planned.operations.some((op) => op.op === 'set' && op.path.join('.') === 'providers.opencode-go-messages' && op.value.api === 'anthropic-messages'));
-  assert.ok(planned.operations.some((op) => op.op === 'set' && op.path.join('.') === 'providers.opencode-go.api' && op.value === 'openai-completions'));
+  assert.equal(planned.operations.length, 2);
+  assert.ok(!planned.operations.some((op) => ['api', 'baseURL'].includes(op.path.at(-1))));
   assert.deepEqual(planned.createdSiblings, ['opencode-go-messages']);
 });
 
@@ -127,7 +144,7 @@ test('planRouteChanges repairs preserve entries verbatim and are idempotent', ()
   const second = detectRouteRepairs(ROUTE, after, INDEX);
   assert.deepEqual(second, []);
   const noop = planRouteChanges(ROUTE, after, { additions: [], repairs: [] }, 'OPENCODE_GO_API_KEY');
-  assert.deepEqual(noop.operations.filter((op) => op.path.join('.').includes('models')), []);
+  assert.deepEqual(noop.operations, []);
 });
 
 test('deepseek additions append selected models only', () => {
@@ -255,6 +272,21 @@ test('planRouteChanges on a siblingOnly route never writes the catalog provider 
     requiresReasoningContentOnAssistantMessages: true,
   });
   assert.deepEqual(planned.createdSiblings.sort(), ['opencode-chat', 'opencode-messages']);
+});
+
+test('sibling-only additions never pin an inherited catalog on the main route', () => {
+  const profiles = { opencode: { apiKeyEnv: 'OPENCODE_API_KEY' } };
+  const additions = [{
+    id: 'qwen3.8-max',
+    api: 'openai-completions',
+    target: 'opencode-chat',
+    entry: buildPiAiEntry({ id: 'qwen3.8-max' }, undefined, modelsDevMeta(OPENCODE_INDEX, 'opencode', 'qwen3.8-max'), OPENCODE_ROUTE, 'openai-completions'),
+  }];
+  const planned = planRouteChanges(OPENCODE_ROUTE, profiles, {
+    additions, repairs: [], servedModels: [{ id: 'claude-opus-5-5' }, { id: 'mimo-v2.6-flash-free' }],
+  }, 'OPENCODE_API_KEY');
+  assert.ok(!planned.operations.some((op) => op.path.slice(0, 2).join('.') === 'providers.opencode'), 'catalog row must stay inherited');
+  assert.ok(planned.operations.some((op) => op.path.join('.') === 'providers.opencode-chat'), 'sibling still receives the model');
 });
 
 test('claude compat rule only applies to 5.x claude models', () => {
