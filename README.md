@@ -39,7 +39,7 @@ dsh-model-sync 补上这一层：**动态发现 → 拉取官方目录 → 计�
 
 安装是否热应用，以返回的 `application`、`warnings`、`nextStep` 为准，不要只看“安装成功”。不要手工编辑 profile 清单、依赖或链接。
 
-从旧版本升级时先 `remove_bundle` 再 `install_bundle`。本版本尚未发布 GitHub Release；发布前请从源码目录安装，不要使用不存在的 tag。
+从旧版本升级时先 `remove_bundle` 再 `install_bundle`。**v0.11.0 已发布为 GitHub Release（tag `v0.11.0`）**；可从该 tag 安装，或继续使用本地仓库目录安装。
 
 ## 使用
 
