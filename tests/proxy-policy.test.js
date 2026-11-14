@@ -82,7 +82,7 @@ test('SystemProxyPolicy installs once per value and reverts to direct when off',
   assert.equal(calls[1].size, 0, 'off must install an explicit direct policy');
 
   await policy.dispose();
-  assert.equal(disposers.length, 1, 'the newest install is the one disposed');
+  assert.equal(disposers.length, 2, 'the replaced install was disposed, and dispose() released the newest');
 });
 
 test('SystemProxyPolicy reports an undetectable proxy but still turns itself on', async () => {
@@ -235,4 +235,42 @@ test('probeProxy reports a listening port as alive and a closed one as dead', as
   });
   assert.equal(await probeProxy(`http://127.0.0.1:${closed}`, 300), false);
   assert.equal(await probeProxy('not a url'), false);
+});
+
+test('switching again restores the previous install before replacing it', async () => {
+  const events = [];
+  const policy = new SystemProxyPolicy({
+    logger: { info() {}, warn() {}, error() {} },
+    detect: async () => ({ url: 'http://127.0.0.1:7897', source: 'system' }),
+    probe: async () => true,
+    install: async (env) => {
+      events.push(`install:${env.size}`);
+      return async () => { events.push('dispose'); };
+    },
+  });
+  await policy.apply(true);
+  await policy.apply(false);
+  assert.deepEqual(events, ['install:3', 'dispose', 'install:0']);
+  await policy.dispose();
+  assert.deepEqual(events, ['install:3', 'dispose', 'install:0', 'dispose']);
+});
+
+test('a failed replacement still leaves the launcher policy restored', async () => {
+  let disposed = 0;
+  let calls = 0;
+  const policy = new SystemProxyPolicy({
+    logger: { info() {}, warn() {}, error() {} },
+    detect: async () => ({ url: 'http://127.0.0.1:7897', source: 'system' }),
+    probe: async () => true,
+    install: async () => {
+      calls += 1;
+      if (calls === 2) throw new Error('Cannot find package');
+      return async () => { disposed += 1; };
+    },
+  });
+  await policy.apply(true);
+  const status = await policy.apply(false);
+  assert.equal(disposed, 1, 'the previous policy was restored before the failed install');
+  assert.equal(status.installed, false);
+  assert.match(status.reason, /无法接管宿主网络/);
 });
