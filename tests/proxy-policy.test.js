@@ -461,3 +461,133 @@ test('a forced re-detection is keyed on the endpoint, not the no_proxy spelling'
   assert.equal(status.active, true);
   assert.equal(installs.length, 1, 'the endpoint did not change, so nothing is reinstalled');
 });
+
+test('a forced re-detection queues behind an off-toggle without leaking a dispatcher', async () => {
+  const installs = [];
+  const disposed = [];
+  const policy = new SystemProxyPolicy({
+    logger: silent,
+    detect: async () => [{ url: 'http://127.0.0.1:7897', display: 'http://127.0.0.1:7897', source: 'system' }],
+    probe: async () => true,
+    install: async (env) => {
+      const value = env.get('https_proxy')?.value ?? '(direct)';
+      installs.push(value);
+      return () => disposed.push(value);
+    },
+  });
+  await policy.apply(true);
+  // Fire a forced re-detection and an off-toggle back to back: the off-toggle
+  // must be the final state, with every install it replaced disposed exactly once.
+  const [, off] = await Promise.all([policy.apply(true, { force: true }), policy.apply(false)]);
+  assert.equal(off.enabled, false);
+  assert.equal(policy.status().enabled, false);
+  assert.deepEqual(installs, ['http://127.0.0.1:7897', '(direct)']);
+  assert.deepEqual(disposed, ['http://127.0.0.1:7897']);
+  await policy.dispose();
+  assert.deepEqual(disposed, ['http://127.0.0.1:7897', '(direct)']);
+});
+
+test('a forced re-detection reads the launch environment, not its own env write', async (t) => {
+  const saved = { ...process.env };
+  for (const key of ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY']) delete process.env[key];
+  t.after(() => {
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+  });
+  const policy = new SystemProxyPolicy({ logger: silent, probe: async () => true, install: async () => () => {} });
+  // Installing rewrites process.env through the Harness policy; a later forced
+  // check must not mistake that write for a user setting.
+  process.env.https_proxy = 'http://127.0.0.1:7897';
+  let seen;
+  policy.detect = async (options) => {
+    seen = options?.env;
+    return [{ url: 'http://127.0.0.1:7890', display: 'http://127.0.0.1:7890', source: 'system' }];
+  };
+  const status = await policy.apply(true, { force: true });
+  assert.ok(seen, 'the detector receives an environment');
+  assert.equal(seen.https_proxy, undefined, 'our own write must not outrank the machine settings');
+  assert.equal(status.url, 'http://127.0.0.1:7890');
+});
+
+test('a transient probe failure keeps the working install', async () => {
+  let alive = true;
+  const installs = [];
+  const disposed = [];
+  const policy = new SystemProxyPolicy({
+    logger: silent,
+    detect: async () => [{ url: 'http://127.0.0.1:7897', display: 'http://127.0.0.1:7897', source: 'system' }],
+    probe: async () => alive,
+    install: async (env) => {
+      const value = env.get('https_proxy')?.value;
+      installs.push(value);
+      return () => disposed.push(value);
+    },
+  });
+  await policy.apply(true);
+  alive = false;
+  const status = await policy.apply(true, { force: true });
+  assert.deepEqual(installs, ['http://127.0.0.1:7897'], 'no reinstall while the proxy restarts');
+  assert.deepEqual(disposed, [], 'the live dispatcher is not torn down on one failed probe');
+  assert.equal(status.active, true);
+  assert.match(status.reason, /继续沿用上次的接管/);
+});
+
+test('replacing an install does not wait for the old close to drain', async () => {
+  const drained = new Promise(() => {});
+  let current = 'http://127.0.0.1:7897';
+  let first = true;
+  const policy = new SystemProxyPolicy({
+    logger: silent,
+    detect: async () => [{ url: current, display: current, source: 'system' }],
+    probe: async () => true,
+    install: async () => {
+      if (!first) return () => {};
+      first = false;
+      return () => drained;
+    },
+  });
+  await policy.apply(true);
+  current = 'http://127.0.0.1:7890';
+  const started = Date.now();
+  const status = await policy.apply(true, { force: true });
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 1000, `the swap must not block on agent.close() (${elapsed}ms)`);
+  assert.equal(status.active, true);
+  assert.equal(status.url, 'http://127.0.0.1:7890');
+});
+
+test('a failing re-detection leaves the live install honest', async () => {
+  let fail = false;
+  const policy = new SystemProxyPolicy({
+    logger: silent,
+    probe: async () => true,
+    install: async () => () => {},
+    detect: async () => {
+      if (fail) throw new Error('scutil exploded');
+      return [{ url: 'http://127.0.0.1:7897', display: 'http://127.0.0.1:7897', source: 'system' }];
+    },
+  });
+  await policy.apply(true);
+  fail = true;
+  const status = await policy.apply(true, { force: true });
+  assert.equal(status.installed, true, 'the dispatcher is still ours');
+  assert.equal(status.active, true, 'and it is still proxying');
+  assert.match(status.reason, /无法接管宿主网络/);
+});
+
+test('the probe budget bounds a forced re-detection', async () => {
+  const policy = new SystemProxyPolicy({
+    logger: silent,
+    budgetMs: 300,
+    detect: async () => [1, 2, 3, 4].map((n) => ({
+      url: `http://127.0.0.1:700${n}`, display: `http://127.0.0.1:700${n}`, source: 'system',
+    })),
+    probe: async () => { await delay(200); return false; },
+    install: async () => () => {},
+  });
+  const started = Date.now();
+  const status = await policy.apply(true, { force: true });
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 900, `probes are capped by the budget (${elapsed}ms)`);
+  assert.equal(status.active, false);
+});
