@@ -4,7 +4,7 @@
 
 ## 当前范围
 
-- 插件工作版本：`0.12.2`；当前宿主 kernel：`0.2.2-rc.1`。
+- 插件工作版本：`0.12.3`；当前宿主 kernel：`0.2.2-rc.1`。
 - 声明兼容范围：`>=0.2.2-rc.1 <0.3.0-0`。未承诺旧 kernel 或另一套 Next GUI 的兼容性。
 - 供应商从公开 `llm.listConfigurableProviders()` 和各实例精确的 settings namespace/path 发现；调用凭据通过 Host credentials 服务解析。
 - 官方目录与 DSH SDK 静态模型表分开。八家具体来源、区域、产品路径和限制见 [README](../README.md#八家官方平台)。智谱公开 schema 不等于账户可用性验证；旧 Llama API 不会被自动迁移。
