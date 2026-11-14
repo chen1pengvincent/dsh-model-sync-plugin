@@ -181,7 +181,8 @@ sessionHeader:
 - 新增 `lib/proxy-policy.js`：代理探测（环境变量优先、macOS `scutil --proxy` 兜底）、安装/回滚、状态上报；`@deepseek-ai/dsh-http-proxy` 先按裸包名解析，失败时从宿主入口向上找 `node_modules`，找不到则降级为「仅目录检查走代理」。
 - 新增 `GET/POST /model-sync/api/proxy`，面板状态行显示「已接管：host:port（环境变量/系统设置）」「未检测到可用的系统代理」或具体失败原因。
 - 安装前对代理做 TCP 存活探测：代理未运行时保持直连并说明原因，避免「配了但没开」的代理拖垮整个进程的网络。
-- 验证：`node --test` 350/350（基线 337 + 新增 13 条）；真实 dispatcher 安装后 `fetch('https://generativelanguage.googleapis.com/…')` 由 10.5 秒超时变为 200（477ms），`dispose()` 后重新超时；OpenAI 端点识别正确并经代理拿到 HTTP 401（本机存的是无效 key，说明传输已通）。
+- 切换时先归还上一份策略再安装新策略：安装失败会回到 Harness 自己的路由，不会留下半套配置；每次安装前先探测代理端口。
+- 验证：`node --test` 352/352（基线 337 + 新增 15 条）；真实 dispatcher 安装后 `fetch('https://generativelanguage.googleapis.com/…')` 由 10.5 秒超时变为 200（477ms），`dispose()` 后重新超时；同一套 Electron 运行时内用 asar 绝对路径导入也验证通过（安装 27 ms → 200 / 374 ms → dispose 后 8 s 超时）；OpenAI 端点识别正确并经代理拿到 HTTP 401（本机存的是无效 key，说明传输已通）。
 
 ### v0.11.1
 

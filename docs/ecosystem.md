@@ -114,5 +114,5 @@ await dispose(); // 恢复到安装前的 dispatcher
 - 探测顺序：进程环境变量 → macOS `scutil --proxy`；只支持 HTTP(S)，SOCKS/PAC 报告为未检测到。
 - 解析模块时先试裸包名（Harness 的 `@deepseek-ai/*` fallback），失败再从宿主入口向上找 `node_modules`；再失败则降级为「仅目录检查走代理」并在面板说明。
 - 安装前做 0.8 秒 TCP 存活探测：代理没在跑时安装显式直连策略并说明原因，而不是把整个进程指向一个死端口。
-- 验证：`node --test` 350/350；真实安装后 `fetch('https://generativelanguage.googleapis.com/v1beta/models')` 从 10.5s 超时变为 477ms/200，`dispose()` 后重新超时；OpenAI 端点识别为 `openai-completions` 并经代理收到 401（本机 key 无效，传输已通）。
+- 验证：`node --test` 352/352（新增 15 条，含「切换前先归还旧策略」「替换失败也要回到 Harness 自己的路由」）；真实安装后 `fetch('https://generativelanguage.googleapis.com/v1beta/models')` 从 10.5s 超时变为 477ms/200，`dispose()` 后重新超时；OpenAI 端点识别为 `openai-completions` 并经代理收到 401（本机 key 无效，传输已通）。
 - 未验证：需要认证的代理（`Proxy-Authorization` 由 Harness 策略处理）、SOCKS/PAC、Windows/Linux 系统代理。
