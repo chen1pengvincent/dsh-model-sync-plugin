@@ -93,3 +93,26 @@ node --check lib/client.js
 **验证**：`node --test` 337/337（基线 324 + 新增 13 条：代理 URL/`scutil` 解析、例外域名与 CIDR、CONNECT 隧道、chunked、abort、对冲、回退、直连优先，以及「对冲后两侧都失败必须快速拒绝」「`redirect: 'error'` 下 3xx 必须当传输错误」两条回归）；真实 Google 目录 `source=official-api, pages=1, models=64`，耗时 2.98 秒（改动前为失败）。
 
 **仍未验证**：Windows/Linux 的系统代理（只读环境变量）、SOCKS 与 PAC、需要认证的代理（`http://user:pass@host:port` 已实现但无实机）。Gemini 的**对话**请求由 DSH 自身的 LLM 传输发起，不受本插件影响；如果宿主同样无法直连 Google，对话仍需一个宿主可达的端点。
+
+## 0.12.0：系统代理开关（不需要虚拟网卡）
+
+0.11.1 只解决了「目录拉不到」。用户实际遇到的是更完整的一条链：**Clash 里只开了系统代理、没开 TUN 时，目录能显示，对话补全仍然超时**——因为目录走的是插件自己的 `lib/net-proxy.js`，对话走的是宿主 pi-ai 的 `globalThis.fetch`。
+
+0.12.0 在供应商列表上方加一个开关，开启时重新安装 Harness 自带的 `@deepseek-ai/dsh-http-proxy` 全局 dispatcher：
+
+```js
+import { installProxyFromEnvironment } from '@deepseek-ai/dsh-http-proxy';
+const dispose = await installProxyFromEnvironment(new Map([['https_proxy', { value: 'http://127.0.0.1:7897' }]]));
+// 之后同一进程里所有 fetch（目录、pi-ai 对话、MCP、web fetch）都走代理
+await dispose(); // 恢复到安装前的 dispatcher
+```
+
+要点：
+
+- `installProxyFromEnvironment(env)` 的 `env` 是「启动环境快照」，形状是 `env.get(name)?.value`，不是普通对象；空 Map 表示显式直连策略。
+- 关闭时安装空 Map，而不是 `dispose()`：否则启动环境里本来就有的代理变量会让「关闭」看起来无效。
+- 探测顺序：进程环境变量 → macOS `scutil --proxy`；只支持 HTTP(S)，SOCKS/PAC 报告为未检测到。
+- 解析模块时先试裸包名（Harness 的 `@deepseek-ai/*` fallback），失败再从宿主入口向上找 `node_modules`；再失败则降级为「仅目录检查走代理」并在面板说明。
+- 安装前做 0.8 秒 TCP 存活探测：代理没在跑时安装显式直连策略并说明原因，而不是把整个进程指向一个死端口。
+- 验证：`node --test` 350/350；真实安装后 `fetch('https://generativelanguage.googleapis.com/v1beta/models')` 从 10.5s 超时变为 477ms/200，`dispose()` 后重新超时；OpenAI 端点识别为 `openai-completions` 并经代理收到 401（本机 key 无效，传输已通）。
+- 未验证：需要认证的代理（`Proxy-Authorization` 由 Harness 策略处理）、SOCKS/PAC、Windows/Linux 系统代理。

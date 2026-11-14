@@ -4,7 +4,7 @@
 
 **查看、启动和检查都不会修改模型配置；只有点击「保存全部变更」才写入。** 不自动删除模型，不自动切换会话模型，不覆盖手工维护的协议、参数和 headers。
 
-> 独立第三方插件，不是 DeepSeek 官方项目。当前版本 **0.11.1**，声明兼容 DSH kernel `>=0.2.2-rc.1 <0.3.0-0`。
+> 独立第三方插件，不是 DeepSeek 官方项目。当前版本 **0.12.0**，声明兼容 DSH kernel `>=0.2.2-rc.1 <0.3.0-0`。
 
 ## 它解决什么问题
 
@@ -28,7 +28,8 @@ dsh-model-sync 补上这一层：**动态发现 → 拉取官方目录 → 计�
 | 协议补全 | OpenAI 新模型尚未进入 DSH SDK 目录时仍可选择，保存时显式写入供应商协议并提示 |
 | 布局与排序 | 单一厂商官方供应商双列网格；多厂商网关保持分组卡片；全部按显示名自然排序 |
 | 安全保存 | 版本 CAS、写前备份、凭据作用域隔离、部分成功精确回执、失败保留旧目录 |
-| 受限网络 | 官方目录请求先直连；直连失败或过慢时按环境变量与 macOS 系统代理并行重试，先成功者生效 |
+| 系统代理开关 | 面板顶部一个开关：开启后宿主进程的 `fetch` 全部走系统代理（目录检查、对话补全、MCP、网页搜索），关闭后恢复直连；默认开启 |
+| 受限网络 | 官方目录请求另有独立通道：先直连，失败或过慢时按环境变量与 macOS 系统代理并行重试，先成功者生效 |
 
 ## 网络受限环境（系统代理）
 
@@ -41,6 +42,20 @@ dsh-model-sync 补上这一层：**动态发现 → 拉取官方目录 → 计�
 
 排查时设置 `DSH_MODEL_SYNC_DEBUG_PROXY=1`，插件会把选中的代理与失败原因写到宿主 stderr。
 
+## 系统代理开关（不需要虚拟网卡）
+
+「模型更新」面板顶部、供应商列表上方有一个开关：**通过系统代理访问模型服务**。它解决的是「只开了系统代理、没开 TUN / 虚拟网卡」时，DSH 里目录能拉到、对话却超时的问题。
+
+- **开启**：把 Harness 自带 `@deepseek-ai/dsh-http-proxy` 的全局 dispatcher 按检测到的代理重新安装一次。Node 的 `fetch` 每个请求都会解析这个 dispatcher，所以同一进程里的目录检查、pi-ai 对话补全、MCP HTTP 传输、网页搜索一起生效，不需要重启、不需要改代码、不需要给每个供应商改 Base URL。
+- **关闭**：安装一个显式的「直连」dispatcher，而不是「回到安装前的样子」——否则启动环境里若本来就有代理变量，用户会关不掉。
+- **代理从哪来**：先看 `HTTPS_PROXY` / `https_proxy` / `ALL_PROXY` / `all_proxy` / `HTTP_PROXY` / `http_proxy`，没有就看 macOS 系统代理（`scutil --proxy`）。只支持 HTTP(S) 代理；SOCKS/PAC 会被报告为「未检测到」，此时开关仍可打开，但面板会说明当前仍为直连。
+- **先探测再接管**：安装前对代理端口做一次 0.8 秒 TCP 探测。代理没在跑（比如 Clash 没启动）时不接管，保持直连并提示「检测到系统代理 …，但连接失败」——一个配了但死掉的代理不应该让整个进程失去网络。
+- **回环永远直连**：`localhost`、`127.0.0.0/8`、`::1` 不会被代理，Web UI 与本机会话不受影响。
+- **持久化**：选择写在 `model-sync/state.json` 的 `proxyEnabled`，默认开启；下次启动先安装再检查目录。
+- **兼容**：如果当前 Harness 版本没有 `@deepseek-ai/dsh-http-proxy`，开关仍然生效于插件自己的目录检查（`lib/net-proxy.js`），并在面板上说明「仅插件的目录检查走系统代理」——对话层需要更新 Harness。
+
+排查：`DSH_MODEL_SYNC_DEBUG_PROXY=1` 会打印插件的选路结果；宿主 dispatcher 的安装结果直接显示在开关下方的状态行（已接管 / 未检测到 / 无法接管的原因）。
+
 ## 安装
 
 要求 DSH kernel `0.2.2-rc.1` 及以上（`<0.3.0-0`）。通过当前 profile 的官方 `plugin_manager` 安装本地仓库目录：
@@ -51,7 +66,7 @@ dsh-model-sync 补上这一层：**动态发现 → 拉取官方目录 → 计�
 
 安装是否热应用，以返回的 `application`、`warnings`、`nextStep` 为准，不要只看“安装成功”。不要手工编辑 profile 清单、依赖或链接。
 
-从旧版本升级时先 `remove_bundle` 再 `install_bundle`。已发布的最新版本是 tag `v0.11.1`（受限网络下的官方目录检查）；可从该 tag 安装，或用 `github:chen1pengvincent/dsh-model-sync-plugin#v0.11.1` 安装。
+从旧版本升级时先 `remove_bundle` 再 `install_bundle`。已发布的最新版本是 tag `v0.12.0`（系统代理开关）；可从该 tag 安装，或用 `github:chen1pengvincent/dsh-model-sync-plugin#v0.12.0` 安装。
 
 ## 使用
 
@@ -159,6 +174,14 @@ sessionHeader:
 ```
 
 ## 更新记录
+
+### v0.12.0
+
+- 新增「通过系统代理访问模型服务」开关（供应商列表上方）：开启后重新安装 Harness 的全局 undici dispatcher，目录检查与对话补全一起走系统代理，关闭后安装显式直连策略；默认开启并持久化在 `state.json` 的 `proxyEnabled`。
+- 新增 `lib/proxy-policy.js`：代理探测（环境变量优先、macOS `scutil --proxy` 兜底）、安装/回滚、状态上报；`@deepseek-ai/dsh-http-proxy` 先按裸包名解析，失败时从宿主入口向上找 `node_modules`，找不到则降级为「仅目录检查走代理」。
+- 新增 `GET/POST /model-sync/api/proxy`，面板状态行显示「已接管：host:port（环境变量/系统设置）」「未检测到可用的系统代理」或具体失败原因。
+- 安装前对代理做 TCP 存活探测：代理未运行时保持直连并说明原因，避免「配了但没开」的代理拖垮整个进程的网络。
+- 验证：`node --test` 350/350（基线 337 + 新增 13 条）；真实 dispatcher 安装后 `fetch('https://generativelanguage.googleapis.com/…')` 由 10.5 秒超时变为 200（477ms），`dispose()` 后重新超时；OpenAI 端点识别正确并经代理拿到 HTTP 401（本机存的是无效 key，说明传输已通）。
 
 ### v0.11.1
 

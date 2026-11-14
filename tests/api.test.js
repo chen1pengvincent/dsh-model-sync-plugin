@@ -49,6 +49,8 @@ function fakeController(overrides = {}) {
     managedSiblings: [],
     removeManagedModels: { at: 3, applied: [], errors: [] },
     removeSiblingModels: { at: 4, applied: [], errors: [] },
+    proxyStatus: { enabled: true, installed: true, url: 'http://127.0.0.1:7897', source: 'system' },
+    setProxyEnabled: { enabled: false, proxy: { enabled: false, installed: true } },
   };
   for (const [name, value] of Object.entries(values)) {
     controller[name] = (...args) => {
@@ -165,6 +167,24 @@ test('API registers its prefix, returns JSON without caching, and rejects unknow
   assert.equal((await request('/state', { method: 'POST' })).status, 404);
   assert.equal((await request('/apply', { method: 'GET' })).status, 404);
   assert.deepEqual(calls.map((item) => item.name), ['status']);
+});
+
+test('the system-proxy switch is readable and requires an explicit boolean on write', async () => {
+  const { request, calls } = fakeController();
+  const read = await request('/proxy', { method: 'GET' });
+  assert.equal(read.status, 200);
+  assert.deepEqual(read.body, { enabled: true, installed: true, url: 'http://127.0.0.1:7897', source: 'system' });
+
+  // Absent or non-boolean values must not silently mean "off": the switch
+  // rewrites every request's transport, so only an explicit boolean applies.
+  for (const body of [{}, { enabled: 'false' }, { enabled: 1 }, { enabled: null }]) {
+    const rejected = await request('/proxy', { body });
+    assert.equal(rejected.status, 400, JSON.stringify(body));
+    assert.match(rejected.body.error, /布尔值/);
+  }
+  assert.equal((await request('/proxy', { body: { enabled: false } })).status, 200);
+  assert.deepEqual(calls.map((item) => item.name), ['proxyStatus', 'setProxyEnabled']);
+  assert.deepEqual(calls[1].args, [false]);
 });
 
 test('JSON input must be an object and malformed JSON never reaches a mutation', async () => {
