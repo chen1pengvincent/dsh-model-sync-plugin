@@ -4,7 +4,7 @@
 
 ## 当前范围
 
-- 插件工作版本：`0.11.1`；当前宿主 kernel：`0.2.2-rc.1`。
+- 插件工作版本：`0.12.2`；当前宿主 kernel：`0.2.2-rc.1`。
 - 声明兼容范围：`>=0.2.2-rc.1 <0.3.0-0`。未承诺旧 kernel 或另一套 Next GUI 的兼容性。
 - 供应商从公开 `llm.listConfigurableProviders()` 和各实例精确的 settings namespace/path 发现；调用凭据通过 Host credentials 服务解析。
 - 官方目录与 DSH SDK 静态模型表分开。八家具体来源、区域、产品路径和限制见 [README](../README.md#八家官方平台)。智谱公开 schema 不等于账户可用性验证；旧 Llama API 不会被自动迁移。
@@ -116,6 +116,20 @@ await dispose(); // 恢复到安装前的 dispatcher
 - 安装前做 0.8 秒 TCP 存活探测：代理没在跑时安装显式直连策略并说明原因，而不是把整个进程指向一个死端口。
 - 验证：`node --test` 352/352（新增 15 条，含「切换前先归还旧策略」「替换失败也要回到 Harness 自己的路由」）；真实安装后 `fetch('https://generativelanguage.googleapis.com/v1beta/models')` 从 10.5s 超时变为 477ms/200，`dispose()` 后重新超时；OpenAI 端点识别为 `openai-completions` 并经代理收到 401（本机 key 无效，传输已通）。
 - 未验证：需要认证的代理（`Proxy-Authorization` 由 Harness 策略处理）、SOCKS/PAC、Windows/Linux 系统代理。
+
+## 0.12.2：检查更新时重新探测系统代理
+
+0.12.1 的开关只在「开启」和「启动」时读一次机器代理，于是有一个真实缺口：用户把代理从 7897 改到别的端口、或换了代理软件，dispatcher 仍指向旧地址，面板还显示「已接管」——只有关掉再开或重启 Harness 才会更新。
+
+0.12.2 把探测挪进 `performCheck()`：每次检查（按钮与启动后的首次检查）先 `await this.reconcileProxy()`，开关为开时 `apply(true, { force: true })`。
+
+- **只有端点变了才重装。** 强制探测选中的 URL 与当前安装一致时直接返回，不 dispose、不重装——避免一次检查把正在流式输出的对话抖掉。比较只看端点：安装本身会改写 `process.env`（Harness 的策略还会补 `::1` 等回环例外），来源标签与 `no_proxy` 写法在回读时会变，不能当作「代理变了」；只改 `no_proxy` 的场景以关再开为准。
+- **变了就换。** `#swap` 仍是先释放旧 dispatcher 再装新的（回归到启动时的策略，再装新值），失败会落进既有的 try/catch 并保留旧值。
+- **没了就还。** 强制探测发现机器上已经没有可用代理时，卸载当前 dispatcher、恢复启动策略，并把原因写进状态（与开启时探测不到的行为一致）。
+- **失败不影响检查。** `reconcileProxy()` 的异常只 `warn`，目录检查继续跑；开关关闭时完全不探测（不读 scutil、不装任何东西）。
+- 只持久化布尔值，地址永远现场读；不存在写死的代理地址或端口。
+
+验证：`361/361`（新增 4 条覆盖换端口、同值不抖、仅来源变化、check 的开关门控与失败隔离）。
 
 ## 0.12.1：系统代理开关的三处评审修正
 

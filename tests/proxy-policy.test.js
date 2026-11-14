@@ -379,3 +379,85 @@ test('a late apply after dispose does not install anything', async () => {
   assert.equal(status.enabled, false, 'a disposed policy never reports enabled');
   assert.equal(installs, 0);
 });
+
+test('a forced re-detection follows the machine proxy without bouncing an unchanged one', async () => {
+  let current = [{ url: 'http://127.0.0.1:7897', display: 'http://127.0.0.1:7897', source: 'system' }];
+  const installs = [];
+  const disposed = [];
+  const policy = new SystemProxyPolicy({
+    logger: silent,
+    detect: async () => current,
+    probe: async () => true,
+    install: async (env) => {
+      const value = env.get('https_proxy')?.value;
+      installs.push(value);
+      return () => disposed.push(value);
+    },
+  });
+
+  await policy.apply(true);
+  assert.deepEqual(installs, ['http://127.0.0.1:7897']);
+
+  // Without `force` the cached decision stands, even if the machine moved.
+  current = [{ url: 'http://127.0.0.1:1080', display: 'http://127.0.0.1:1080', source: 'system' }];
+  await policy.apply(true);
+  assert.equal(installs.length, 1);
+
+  // Forced: swap to the new port, restoring the previous install first.
+  const moved = await policy.apply(true, { force: true });
+  assert.deepEqual(installs, ['http://127.0.0.1:7897', 'http://127.0.0.1:1080']);
+  assert.deepEqual(disposed, ['http://127.0.0.1:7897'], 'the old dispatcher is disposed before the new one lands');
+  assert.equal(moved.active, true);
+  assert.equal(moved.url, 'http://127.0.0.1:1080');
+
+  // Forced but unchanged: keep the live dispatcher instead of bouncing it.
+  await policy.apply(true, { force: true });
+  assert.equal(installs.length, 2, 'the same proxy must not be reinstalled');
+  assert.deepEqual(disposed, ['http://127.0.0.1:7897']);
+
+  // Forced and the machine has no proxy any more: hand control back honestly.
+  current = [];
+  const gone = await policy.apply(true, { force: true });
+  assert.equal(gone.active, false);
+  assert.equal(gone.installed, false);
+  assert.match(gone.reason, /未检测到可用的系统代理/);
+  assert.deepEqual(disposed, ['http://127.0.0.1:7897', 'http://127.0.0.1:1080']);
+});
+
+test('a forced re-detection reuses the same install when only the source label changed', async () => {
+  let current = [{ url: 'http://10.0.0.9:3128', display: 'http://10.0.0.9:3128', source: 'system' }];
+  const installs = [];
+  const policy = new SystemProxyPolicy({
+    logger: silent,
+    detect: async () => current,
+    probe: async () => true,
+    install: async (env) => { installs.push(env.get('https_proxy')?.value); return () => {}; },
+  });
+  await policy.apply(true);
+  // Installing rewrites process.env, so the same proxy legitimately comes back
+  // labelled `environment` next time — that alone must not bounce the dispatcher.
+  current = [{ url: 'http://10.0.0.9:3128', display: 'http://10.0.0.9:3128', source: 'environment' }];
+  const status = await policy.apply(true, { force: true });
+  assert.equal(status.active, true);
+  assert.equal(status.source, 'environment');
+  assert.equal(installs.length, 1);
+});
+
+test('a forced re-detection is keyed on the endpoint, not the no_proxy spelling', async () => {
+  let current = [{ url: 'http://10.0.0.9:3128', display: 'http://10.0.0.9:3128', source: 'system', bypass: ['localhost'] }];
+  const installs = [];
+  const policy = new SystemProxyPolicy({
+    logger: silent,
+    detect: async () => current,
+    probe: async () => true,
+    install: async (env) => { installs.push(env.get('no_proxy')?.value); return () => {}; },
+  });
+  await policy.apply(true);
+  assert.deepEqual(installs, ['localhost']);
+  // The Harness policy appends loopback escapes when it writes process.env, so
+  // reading our own install back yields a longer list; that must not churn.
+  current = [{ url: 'http://10.0.0.9:3128', display: 'http://10.0.0.9:3128', source: 'environment', bypass: ['localhost', '::1', '[::1]'] }];
+  const status = await policy.apply(true, { force: true });
+  assert.equal(status.active, true);
+  assert.equal(installs.length, 1, 'the endpoint did not change, so nothing is reinstalled');
+});

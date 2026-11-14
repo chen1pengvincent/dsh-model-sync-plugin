@@ -124,6 +124,14 @@ function makeHarness({ modelList, opencodeList = ['claude-opus-5-5', 'mimo-v2.6-
     throw new Error(`Unexpected synthetic fetch target: ${address}`);
   };
   const controller = new SyncController({ ctx, state, logger: { info() {}, warn() {}, error() {} } });
+  // The switch itself is covered by tests/proxy-policy.test.js; every other test
+  // must not touch the machine's real proxy settings (or install a dispatcher).
+  controller.proxy = {
+    disposed: false,
+    apply: async (enabled) => ({ enabled: enabled === true, active: false }),
+    status: () => ({ enabled: state.proxyEnabled(), active: false }),
+    dispose() {},
+  };
   return {
     controller, state, document, mutations, settings, revisions, descriptions, catalogs, requests, fetchCalls, patchPath,
     get prepareCalls() { return prepareCalls; },
@@ -967,4 +975,38 @@ test('official modelOverrides migrate on save instead of refusing the user', asy
     assert.deepEqual(profile.models.map((model) => model.id), ['deepseek-v4-pro', 'deepseek-v4-flash']);
     assert.equal(profile.models[0].maxTokens, 4321);
   } finally { h.cleanup(); }
+});
+
+
+test('a check re-detects the machine proxy, and only when the switch is on', async (t) => {
+  const harness = makeHarness({ modelList: ['kimi-k3'] });
+  t.after(() => harness.cleanup());
+  const calls = [];
+  harness.controller.proxy = {
+    disposed: false,
+    apply: async (enabled, options) => { calls.push({ enabled, options }); return { enabled }; },
+    status: () => ({ enabled: true, active: false }),
+    dispose() {},
+  };
+
+  await harness.controller.check();
+  assert.equal(calls.length, 1, 'an enabled switch reconciles on every check');
+  assert.deepEqual(calls[0], { enabled: true, options: { force: true } });
+
+  harness.state.setProxyEnabled(false);
+  await harness.controller.check();
+  assert.equal(calls.length, 1, 'a disabled switch must not probe or install anything');
+});
+
+test('a failing proxy re-detection never fails the check', async (t) => {
+  const harness = makeHarness({ modelList: ['kimi-k3'] });
+  t.after(() => harness.cleanup());
+  harness.controller.proxy = {
+    disposed: false,
+    apply: async () => { throw new Error('scutil exploded'); },
+    status: () => ({ enabled: true, active: false }),
+    dispose() {},
+  };
+  const payload = await harness.controller.check();
+  assert.ok(Array.isArray(payload.results) && payload.results.length > 0, 'discovery still runs');
 });
