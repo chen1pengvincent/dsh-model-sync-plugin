@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-sync",
-  "version": "0.12.4",
+  "version": "0.12.5",
   "private": true,
   "description": "动态发现 DSH 官方模型供应商，查看目录未读新增/移除，显式勾选保存；保护手工配置并保留 OpenCode 协议分流与会话标头支持。Discover configured official providers, track unread catalog changes, and explicitly select models for DeepSeek Harness.",
   "type": "module",

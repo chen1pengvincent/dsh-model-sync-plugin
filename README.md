@@ -4,7 +4,15 @@
 
 **查看、启动和检查都不会修改模型配置；只有点击「保存全部变更」才写入。** 不自动删除模型，不自动切换会话模型，不覆盖手工维护的协议、参数和 headers。
 
-> 独立第三方插件，不是 DeepSeek 官方项目。当前版本 **0.12.4**，声明兼容 DSH kernel `>=0.2.2-rc.1 <0.3.0-0`。
+> 独立第三方插件，不是 DeepSeek 官方项目。当前版本 **0.12.5**，声明兼容 DSH kernel `>=0.2.2-rc.1 <0.3.0-0`。
+
+## 0.12.5：Kimi K3.1 与「清空」
+
+- **OpenCode Go 的 Kimi K3.1 不再被跳过。** `kimi-k3.1-pro` 在 models.dev 里是 `openai-completions`，但本机 DSH SDK 目录没有它；0.12.4 的保守逻辑会把它留在主供应商 `opencode-go` 并警告跳过。现在改为按上游协议把它落到 `opencode-go-chat` 这个协议子路由，带上显式 `api`/`baseURL`，主供应商继续服务 claude/gemini/qwen 等各自协议不同的已知模型。真实宿主保存后，`opencode-go-chat/kimi-k3.1-pro` 对话返回 `ok`。
+- **Kimi Coding 的 K3.1 保持可用。** `k3.1-pro` 仍按单协议路由固定为 `anthropic-messages` + `https://api.kimi.com/coding`；真实宿主保存后 `kimi-coding/k3.1-pro` 对话返回 `ok`。
+- **上游能力的常态机制。** 协议分类来自 models.dev 的 npm 元数据（缓存 24 小时刷新，每次检查优先取缓存、过期后拉取）；没有按 `kimi-k3.1-pro` 写死任何模型 ID。多协议路由上，本机 SDK 不认识的模型统一落到对应协议子路由；协议也无法判定的模型才跳过并 warning，绝不写 provider 级 `api` 去覆盖已知模型。新增回归测试用完全虚构的 `brand-new-model` 验证了这条通用路径。
+- **「清空」现在会真正生成可保存的移除。** 已配置（`added`）且插件可移除的行会被标成待移除，而不是只清掉未保存的勾选。由于 llm-pi-ai 拒绝“供应商一个模型都不剩”的配置，每个供应商会保留主供应商自有的第一个已添加行（不会拿同卡 sibling 行当幸存者），并弹出「至少保留一个模型」提示；其余行全部取消勾选并可保存。真实组件夹具验证：2 个已添加行点「清空」后 1 个保留、1 个待移除，保存请求 `selections` 为空、`removals` 一项，页脚显示「添加 0 个 · 移除 1 个」。
+- 验证：`383 tests / 380 pass / 3 fail`（3 个失败仍是 `tests/state.test.js` 的 Electron helper 基线问题），controller `60/60`；隔离真实宿主一次保存 Kimi Coding `k3.1-pro` 与 OpenCode Go `kimi-k3.1-pro`，`errors: []`，自动创建 `opencode-go-chat`，两条路径分别对话返回 `ok`。
 
 ## 0.12.4：修复「保存了好几次都报错」
 
@@ -65,13 +73,13 @@ dsh-model-sync 补上这一层：**动态发现 → 拉取官方目录 → 计�
 打开 **DSH → 设置 → 插件 → 安装**，输入：
 
 ```text
-github:chen1pengvincent/dsh-model-sync-plugin#v0.12.4
+github:chen1pengvincent/dsh-model-sync-plugin#v0.12.5
 ```
 
 也可以让当前 profile 的 `plugin_manager` 安装：
 
 ```json
-{"action":"install_bundle","target":"github:chen1pengvincent/dsh-model-sync-plugin#v0.12.4"}
+{"action":"install_bundle","target":"github:chen1pengvincent/dsh-model-sync-plugin#v0.12.5"}
 ```
 
 安装后**完全退出并重新打开 DSH**（Host 模块只在 Harness 重启后重新加载；只刷新页面不够），再硬刷新页面（macOS：`Cmd+Shift+R`）。以返回的 `application`、`warnings`、`nextStep` 为准，不要只看「安装成功」；不要手工编辑 profile 清单、依赖或链接。
@@ -94,7 +102,7 @@ git clone https://github.com/chen1pengvincent/dsh-model-sync-plugin.git
 
 ```json
 {"action":"remove_bundle","target":"dsh-model-sync"}
-{"action":"install_bundle","target":"github:chen1pengvincent/dsh-model-sync-plugin#v0.12.4"}
+{"action":"install_bundle","target":"github:chen1pengvincent/dsh-model-sync-plugin#v0.12.5"}
 ```
 
 ## 使用
@@ -229,6 +237,13 @@ sessionHeader:
 
 ## 更新记录
 
+### v0.12.5
+
+- 多协议路由的未知模型改为按 models.dev 协议落到协议子路由，不再跳过；OpenCode Go 的 `kimi-k3.1-pro` 因此可用。
+- 新增上游能力回归测试（虚构模型）与单协议 Kimi K3.1 / 双协议 OpenCode Go K3.1 的真实宿主对话验证。
+- 「清空」会把已配置且可移除的模型标为待移除；每个供应商保留第一个模型，避免 llm-pi-ai 的空供应商拒绝。
+- 验证：`383 tests / 380 pass / 3 fail`，controller `60/60`。
+
 ### v0.12.4
 
 - **修复 Kimi Coding 保存失败。** 单协议且带 route-wide `compat` 的路由，在本次改动模型、供应商未显式设置 `api` 时，保存会同时固定协议与 `baseURL`；Kimi Coding 写入 `api: anthropic-messages`、`baseURL: https://api.kimi.com/coding`，避免目录的 `openai-completions` 与路由 `compat` 冲突，也避免 api-only 方案产生 `/coding/v1/v1/messages` 404。
@@ -264,7 +279,7 @@ sessionHeader:
 
 ## 已知限制
 
-- **部分保存**：多协议路由的目录外模型会被跳过并 warning；这是为了防止写错协议。需要保存时，请显式配置供应商 `api`/`baseURL` 或取消勾选。主提示可能显示「已保存：添加 0 个模型」，请以 warning 为准。
+- **部分保存**：多协议路由上无法判定协议的目录外模型仍会被跳过并 warning；可判定协议的模型会落到协议子路由。主提示可能显示「已保存：添加 0 个模型」，请以 warning 为准。
 - **通用错误文案仍在**：本次修复移除了当前触发点，但 `applySelection` 对组内其他未知异常的兜底仍可能显示「操作失败；配置和上次成功目录均已保留」。遇到时请保留 `state.json` 和界面提示。
 - **目录读取瞬时失败**：极少数情况下 `listModels` 抛错会使本次新增被保守跳过并标记为未知；重试检查/保存即可，不会写入错误传输。
 - **compatByModel-only 路由**：只声明 `compatByModel` 的单协议路由目前不做 provider 级固定，未来若出现未知模型仍可能落入通用错误；当前内置路由没有这种形态。
@@ -284,7 +299,7 @@ node --check lib/index.js
 node --check lib/client.js
 ```
 
-使用 Node 内置测试运行器；测试中的供应商 API 为受控响应，不消耗模型额度。当前测试套件 **378 项**（`375 pass / 3 fail`），覆盖动态供应商发现、八家目录协议、分页与错误保护、目录净差/首次基线/精确版本已读、前端标记生命周期、保存 CAS、手工模型保护、部分成功、跨进程状态并发、不适用模型过滤、重复快照折叠、协议补全、协议/端点固定与多协议跳过。
+使用 Node 内置测试运行器；测试中的供应商 API 为受控响应，不消耗模型额度。当前测试套件 **383 项**（`380 pass / 3 fail`），覆盖动态供应商发现、八家目录协议、分页与错误保护、目录净差/首次基线/精确版本已读、前端标记生命周期、保存 CAS、手工模型保护、部分成功、跨进程状态并发、不适用模型过滤、重复快照折叠、协议补全、协议/端点固定、协议子路由与「清空」行为。
 
 本机测试环境以 Electron helper 作为 Node 运行时，`tests/state.test.js` 的 3 个「独立进程」用例会因 `process.execPath` 是 Electron helper（退出码 64）失败；`git archive` 的干净基线表现相同。使用标准 Node.js 24+ 运行即可全部通过。
 

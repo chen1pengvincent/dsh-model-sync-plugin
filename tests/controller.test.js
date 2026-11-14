@@ -358,29 +358,124 @@ test('applySelection appends only selected ids and creates protocol siblings', a
   } finally { h.cleanup(); }
 });
 
-test('an unknown main-route model on a multi-protocol route is skipped with a warning', async () => {
-  const h = makeHarness({ modelList: FULL_LIST, llmModels: { 'opencode-go': [{ id: 'kimi-k3' }] } });
-  h.document['llm-pi-ai'].providers['opencode-go'].models = [];
+test('an unknown main-route model is materialized in the primary protocol sibling', async () => {
+  const h = makeHarness({
+    modelList: FULL_LIST,
+    llmModels: { 'opencode-go': [{ id: 'kimi-k3' }, { id: 'claude-haiku-5-5' }] },
+  });
+  const main = h.document['llm-pi-ai'].providers['opencode-go'];
+  main.models = [{ id: 'kimi-k3' }, { id: 'claude-haiku-5-5' }];
   try {
-    const before = structuredClone(h.document);
+    const beforeMain = structuredClone(main);
     const outcome = await checkedApply(h, { 'opencode-go': ['deepseek-flash'] });
-    assert.equal(outcome.errors.length, 0);
-    assert.equal(outcome.applied[0].added, 0);
-    assert.match(outcome.warnings[0].reason, /不在本机模型目录中/);
-    assert.deepEqual(h.document, before, 'a skipped model must never write a provider-level transport');
-    assert.equal(h.mutations.length, 0);
+    assertApplied(outcome, { provider: 'opencode-go', added: 1 });
+    assert.deepEqual(outcome.warnings, []);
+    assert.deepEqual(h.document['llm-pi-ai'].providers['opencode-go'], beforeMain);
+    const chat = h.document['llm-pi-ai'].providers['opencode-go-chat'];
+    assert.equal(chat.api, 'openai-completions');
+    assert.equal(chat.baseURL, 'https://opencode.ai/zen/go/v1');
+    assert.equal(chat.apiKeyEnv, 'OPENCODE_GO_API_KEY');
+    assert.deepEqual(chat.models.map((model) => model.id), ['deepseek-flash']);
+    assert.deepEqual(h.state.knownSiblings('opencode-go'), ['opencode-go-chat']);
+    const checked = (await h.controller.check()).results.find((row) => row.provider === 'opencode-go');
+    const chatRow = checked.allItems.find((item) => item.id === 'deepseek-flash');
+    assert.equal(chatRow.target, 'opencode-go');
+    assert.equal(chatRow.originProviderName, 'opencode-go-chat', 'physical owner must not be the classified target');
+    const writes = h.mutations.length;
+    const again = await checkedApply(h, { 'opencode-go': ['deepseek-flash'] });
+    assert.deepEqual(again.errors, []);
+    assert.equal(again.applied[0].added, 0, 'the primary sibling is part of the existing-model scan');
+    assert.equal(h.mutations.length, writes, 're-adding is a write-free no-op');
   } finally { h.cleanup(); }
 });
 
-test('an unknown main-route model is skipped even when explicit rows already exist', async () => {
+test('a brand-new upstream-classified model is routed to its protocol sibling', async () => {
+  const h = makeHarness({
+    modelList: [...FULL_LIST, 'brand-new-model'],
+    llmModels: { 'opencode-go': [{ id: 'kimi-k3' }] },
+    modelsDevExtra: { 'opencode-go': { npm: '@ai-sdk/openai-compatible', models: { 'brand-new-model': { provider: { npm: '@ai-sdk/openai-compatible' } } } } },
+  });
+  try {
+    const before = structuredClone(h.document['llm-pi-ai'].providers['opencode-go']);
+    const outcome = await checkedApply(h, { 'opencode-go': ['brand-new-model'] });
+    assertApplied(outcome, { provider: 'opencode-go', added: 1 });
+    assert.deepEqual(outcome.warnings, []);
+    assert.deepEqual(h.document['llm-pi-ai'].providers['opencode-go'], before, 'the main provider transport is never rewritten');
+    const chat = h.document['llm-pi-ai'].providers['opencode-go-chat'];
+    assert.equal(chat.api, 'openai-completions');
+    assert.equal(chat.baseURL, 'https://opencode.ai/zen/go/v1');
+    assert.deepEqual(chat.models.map((model) => model.id), ['brand-new-model']);
+  } finally { h.cleanup(); }
+});
+
+test('a model materialized in the primary sibling can be removed again', async () => {
+  const h = makeHarness({
+    modelList: FULL_LIST,
+    llmModels: { 'opencode-go': [{ id: 'kimi-k3' }] },
+  });
+  try {
+    assertApplied(await checkedApply(h, { 'opencode-go': ['deepseek-flash'] }), { provider: 'opencode-go', added: 1 });
+    assert.ok(h.document['llm-pi-ai'].providers['opencode-go-chat']);
+    assertApplied(await checkedApply(h, { 'opencode-go': [] }, { removals: [{ provider: 'opencode-go', id: 'deepseek-flash' }] }), { provider: 'opencode-go', removed: 1 });
+    assert.equal(h.document['llm-pi-ai'].providers['opencode-go-chat'], undefined);
+    assert.deepEqual(h.state.knownSiblings('opencode-go'), []);
+    assert.deepEqual(h.document['llm-pi-ai'].providers['opencode-go'].models.map((model) => model.id), ['kimi-k3']);
+  } finally { h.cleanup(); }
+});
+
+test('a customized primary sibling is not deleted wholesale by a main-card removal', async () => {
+  const h = makeHarness({ modelList: FULL_LIST, llmModels: { 'opencode-go': [{ id: 'kimi-k3' }] } });
+  try {
+    assertApplied(await checkedApply(h, { 'opencode-go': ['deepseek-flash'] }), { provider: 'opencode-go', added: 1 });
+    const chat = h.document['llm-pi-ai'].providers['opencode-go-chat'];
+    chat.baseURL = 'https://proxy.example/v1';
+    chat.apiKeyEnv = 'PROXY_KEY';
+    const before = structuredClone(chat);
+    const outcome = await checkedApply(h, { 'opencode-go': [] }, { removals: [{ provider: 'opencode-go', id: 'deepseek-flash' }] });
+    assertRefused(outcome);
+    assert.match(outcome.errors[0].reason, /自定义连接配置/);
+    assert.deepEqual(h.document['llm-pi-ai'].providers['opencode-go-chat'], before);
+    assert.deepEqual(h.document['llm-pi-ai'].providers['opencode-go'].models.map((model) => model.id), ['kimi-k3']);
+  } finally { h.cleanup(); }
+});
+
+test('a foreign provider with a builtin sibling name is not reported as owned', async () => {
+  const h = makeHarness({ modelList: FULL_LIST, llmModels: { 'opencode-go': [{ id: 'kimi-k3' }] } });
+  try {
+    const foreign = { api: 'openai-completions', baseURL: 'https://custom.example/v1', apiKeyEnv: 'MY_KEY', models: [{ id: 'deepseek-flash', name: 'Foreign Flash' }] };
+    h.document['llm-pi-ai'].providers['opencode-go-chat'] = structuredClone(foreign);
+    const outcome = await checkedApply(h, { 'opencode-go': ['deepseek-flash'] });
+    assert.deepEqual(outcome.errors, []);
+    assert.deepEqual(h.document['llm-pi-ai'].providers['opencode-go-chat'], foreign);
+    assert.equal(h.document['llm-pi-ai'].providers['opencode-go'].models.some((model) => model.id === 'deepseek-flash'), false);
+    assert.match(outcome.warnings[0].reason, /不在本机模型目录中/);
+  } finally { h.cleanup(); }
+});
+
+test('an unknown model is redirected even when the main provider pins a different api', async () => {
+  const h = makeHarness({ modelList: FULL_LIST, llmModels: { 'opencode-go': [{ id: 'kimi-k3' }] } });
+  try {
+    const main = h.document['llm-pi-ai'].providers['opencode-go'];
+    main.api = 'anthropic-messages';
+    main.baseURL = 'https://opencode.ai/zen/go';
+    const before = structuredClone(main);
+    const outcome = await checkedApply(h, { 'opencode-go': ['deepseek-flash'] });
+    assertApplied(outcome, { provider: 'opencode-go', added: 1 });
+    assert.deepEqual(h.document['llm-pi-ai'].providers['opencode-go'], before);
+    assert.equal(h.document['llm-pi-ai'].providers['opencode-go-chat'].models[0].id, 'deepseek-flash');
+    assert.equal(h.document['llm-pi-ai'].providers['opencode-go-chat'].api, 'openai-completions');
+  } finally { h.cleanup(); }
+});
+
+test('an unknown main-route model does not rewrite existing explicit rows', async () => {
   const h = makeHarness({ modelList: FULL_LIST, llmModels: { 'opencode-go': [{ id: 'kimi-k3' }] } });
   try {
     const before = structuredClone(h.document['llm-pi-ai'].providers['opencode-go']);
     const outcome = await checkedApply(h, { 'opencode-go': ['deepseek-flash'] });
     assert.equal(outcome.errors.length, 0);
-    assert.match(outcome.warnings[0].reason, /本次未保存这些模型/);
+    assert.deepEqual(outcome.warnings, []);
     assert.deepEqual(h.document['llm-pi-ai'].providers['opencode-go'], before);
-    assert.equal(h.mutations.length, 0);
+    assert.deepEqual(h.document['llm-pi-ai'].providers['opencode-go-chat'].models.map((model) => model.id), ['deepseek-flash']);
   } finally { h.cleanup(); }
 });
 
