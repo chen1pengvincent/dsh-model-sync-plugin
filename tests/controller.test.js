@@ -20,7 +20,7 @@ function applyOps(root, ops) {
   }
 }
 
-function makeHarness({ modelList, opencodeList = ['claude-opus-5-5', 'mimo-v2.6-flash-free'], extraProviders = false, credentialDescription = { configured: true, source: 'file', writable: true, shadowed: false }, kimiStatus = undefined, modelsDevExtra = {}, openrouterList = ['x/one', 'y/two'], openrouterProfile = {}, deepseekProfile = {}, llmModels = undefined }) {
+function makeHarness({ modelList, opencodeList = ['claude-opus-5-5', 'mimo-v2.6-flash-free'], extraProviders = false, credentialDescription = { configured: true, source: 'file', writable: true, shadowed: false }, kimiStatus = undefined, modelsDevExtra = {}, openrouterList = ['x/one', 'y/two'], openrouterProfile = {}, deepseekProfile = {}, llmModels = undefined, kimiList = ['k3'], kimiProfile = {} }) {
   const dir = mkdtempSync(join(tmpdir(), 'model-sync-test-'));
   const state = new SyncState(dir);
   const providers = {
@@ -32,7 +32,7 @@ function makeHarness({ modelList, opencodeList = ['claude-opus-5-5', 'mimo-v2.6-
   };
   if (extraProviders) {
     providers.openrouter = { displayName: 'OpenRouter', apiKeyEnv: 'OPENROUTER_API_KEY', models: [], ...openrouterProfile };
-    providers['kimi-coding'] = { displayName: 'Kimi Coding', apiKeyEnv: 'KIMI_CODING_API_KEY', models: [] };
+    providers['kimi-coding'] = { displayName: 'Kimi Coding', apiKeyEnv: 'KIMI_CODING_API_KEY', models: [], ...structuredClone(kimiProfile) };
   }
   const document = {
     'llm-deepseek': { apiKeyEnv: 'DEEPSEEK_API_KEY', models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro' }], ...deepseekProfile },
@@ -75,7 +75,7 @@ function makeHarness({ modelList, opencodeList = ['claude-opus-5-5', 'mimo-v2.6-
   };
   const catalogs = {
     go: structuredClone(modelList), opencode: structuredClone(opencodeList),
-    deepseek: ['deepseek-v4-flash', 'deepseek-v4-pro'], openrouter: structuredClone(openrouterList), kimi: ['k3'],
+    deepseek: ['deepseek-v4-flash', 'deepseek-v4-pro'], openrouter: structuredClone(openrouterList), kimi: structuredClone(kimiList),
   };
   const requests = [];
   const fetchCalls = [];
@@ -220,9 +220,117 @@ test('openrouter lists but preselects nothing; kimi is preselected; managed togg
     assertApplied(await checkedApply(h, { 'kimi-coding': ['k3'] }), { provider: 'kimi-coding', added: 1 });
     const kimi = h.document['llm-pi-ai'].providers['kimi-coding'];
     assert.deepEqual(kimi.models.map((model) => model.id), ['k3']);
-    assert.equal(kimi.api, undefined, 'saving native Kimi model rows must not materialize its protocol');
-    assert.equal(kimi.baseURL, undefined, 'saving native Kimi model rows must not materialize its endpoint');
+    assert.equal(kimi.api, 'anthropic-messages', 'single-protocol compat routes pin their protocol so catalog api cannot invalidate route compat');
+    assert.equal(kimi.baseURL, 'https://api.kimi.com/coding', 'the protocol pin must carry the Anthropic base path, not the /v1 OpenAI discovery path');
+    assert.equal(new URL(`${kimi.baseURL}/v1/messages`).href, 'https://api.kimi.com/coding/v1/messages');
     assert.equal(kimi.apiKeyEnv, 'KIMI_CODING_API_KEY');
+  } finally { h.cleanup(); }
+});
+
+test('a custom baseURL blocks the protocol pin instead of being overwritten', async () => {
+  const h = makeHarness({ modelList: FULL_LIST, extraProviders: true });
+  try {
+    h.document['llm-pi-ai'].providers['kimi-coding'].baseURL = 'https://api.kimi.com/coding/v1';
+    const outcome = await checkedApply(h, { 'kimi-coding': ['k3'] });
+    assertRefused(outcome);
+    assert.match(outcome.errors[0].reason, /自定义 baseURL/);
+    assert.equal(h.mutations.length, 0, 'the refusal happens before settings.mutate');
+    assert.equal(h.document['llm-pi-ai'].providers['kimi-coding'].api, undefined);
+    assert.equal(h.document['llm-pi-ai'].providers['kimi-coding'].baseURL, 'https://api.kimi.com/coding/v1');
+  } finally { h.cleanup(); }
+});
+
+test('an explicit incompatible api is refused instead of producing the generic error', async () => {
+  const h = makeHarness({ modelList: FULL_LIST, extraProviders: true });
+  try {
+    h.document['llm-pi-ai'].providers['kimi-coding'].api = 'openai-completions';
+    const outcome = await checkedApply(h, { 'kimi-coding': ['k3'] });
+    assertRefused(outcome);
+    assert.match(outcome.errors[0].reason, /openai-completions|未托管/);
+    assert.equal(h.mutations.length, 0);
+    assert.equal(h.document['llm-pi-ai'].providers['kimi-coding'].api, 'openai-completions');
+  } finally { h.cleanup(); }
+});
+
+test('an unknown kimi model gets the pinned protocol and endpoint', async () => {
+  const h = makeHarness({ modelList: FULL_LIST, extraProviders: true, kimiList: ['k3', 'k3.1-pro'] });
+  try {
+    assertApplied(await checkedApply(h, { 'kimi-coding': ['k3.1-pro'] }), { provider: 'kimi-coding', added: 1 });
+    const kimi = h.document['llm-pi-ai'].providers['kimi-coding'];
+    assert.deepEqual(kimi.models.map((model) => model.id), ['k3.1-pro']);
+    assert.equal(kimi.api, 'anthropic-messages');
+    assert.equal(kimi.baseURL, 'https://api.kimi.com/coding');
+    assert.equal(new URL(`${kimi.baseURL}/v1/messages`).href, 'https://api.kimi.com/coding/v1/messages');
+  } finally { h.cleanup(); }
+});
+
+test('after pinning kimi the next check still uses the catalog listing base', async () => {
+  const h = makeHarness({ modelList: FULL_LIST, extraProviders: true });
+  try {
+    assertApplied(await checkedApply(h, { 'kimi-coding': ['k3'] }), { provider: 'kimi-coding', added: 1 });
+    const before = h.requests.length;
+    const payload = await h.controller.check();
+    const kimi = payload.results.find((row) => row.provider === 'kimi-coding');
+    assert.equal(kimi.status, 'ok', kimi.reason);
+    const after = h.requests.slice(before);
+    assert.ok(after.includes('https://api.kimi.com/coding/v1/models'), 'the pinned wire base must not replace the discovery base');
+    assert.ok(!after.includes('https://api.kimi.com/coding/models'), 'the discovery probe must not use the wire base');
+  } finally { h.cleanup(); }
+});
+
+test('removal-only saves still repair a compat route with no api pin', async () => {
+  const h = makeHarness({
+    modelList: FULL_LIST, extraProviders: true,
+    kimiList: ['k3.1-pro', 'k3.1-pro-highspeed'],
+    kimiProfile: { models: [
+      { id: 'k3.1-pro', compat: { forceAdaptiveThinking: true } },
+      { id: 'k3.1-pro-highspeed', compat: { forceAdaptiveThinking: true } },
+    ] },
+  });
+  try {
+    const outcome = await checkedRemove(h, [{ provider: 'kimi-coding', id: 'k3.1-pro-highspeed' }]);
+    assertApplied(outcome, { provider: 'kimi-coding', removed: 1 });
+    const kimi = h.document['llm-pi-ai'].providers['kimi-coding'];
+    assert.deepEqual(kimi.models.map((model) => model.id), ['k3.1-pro']);
+    assert.equal(kimi.api, 'anthropic-messages');
+    assert.equal(kimi.baseURL, 'https://api.kimi.com/coding');
+  } finally { h.cleanup(); }
+});
+
+test('an explicit correct api gets a missing baseURL repaired', async () => {
+  const h = makeHarness({ modelList: FULL_LIST, extraProviders: true });
+  try {
+    h.document['llm-pi-ai'].providers['kimi-coding'].api = 'anthropic-messages';
+    assertApplied(await checkedApply(h, { 'kimi-coding': ['k3'] }), { provider: 'kimi-coding', added: 1 });
+    const kimi = h.document['llm-pi-ai'].providers['kimi-coding'];
+    assert.equal(kimi.api, 'anthropic-messages');
+    assert.equal(kimi.baseURL, 'https://api.kimi.com/coding');
+  } finally { h.cleanup(); }
+});
+
+test('a trailing slash on the pinned base is normalized', async () => {
+  const h = makeHarness({ modelList: FULL_LIST, extraProviders: true });
+  try {
+    h.document['llm-pi-ai'].providers['kimi-coding'].api = 'anthropic-messages';
+    h.document['llm-pi-ai'].providers['kimi-coding'].baseURL = 'https://api.kimi.com/coding/';
+    assertApplied(await checkedApply(h, { 'kimi-coding': ['k3'] }), { provider: 'kimi-coding', added: 1 });
+    assert.equal(h.document['llm-pi-ai'].providers['kimi-coding'].baseURL, 'https://api.kimi.com/coding');
+  } finally { h.cleanup(); }
+});
+
+test('a null compat entry does not crash a compat-route save', async () => {
+  const h = makeHarness({
+    modelList: FULL_LIST, extraProviders: true,
+    kimiList: ['k3', 'k3.1-pro'],
+    kimiProfile: { models: [{ id: 'k3', compat: null }] },
+  });
+  try {
+    assertApplied(await checkedApply(h, { 'kimi-coding': ['k3.1-pro'] }), { provider: 'kimi-coding', added: 1 });
+    const kimi = h.document['llm-pi-ai'].providers['kimi-coding'];
+    assert.equal(kimi.models.find((model) => model.id === 'k3').compat, null);
+    assert.deepEqual(kimi.models.find((model) => model.id === 'k3.1-pro').compat, { allowEmptySignature: true, forceAdaptiveThinking: true });
+    assert.equal(kimi.api, 'anthropic-messages');
+    assert.equal(kimi.baseURL, 'https://api.kimi.com/coding');
   } finally { h.cleanup(); }
 });
 
@@ -247,6 +355,32 @@ test('applySelection appends only selected ids and creates protocol siblings', a
     assert.deepEqual(again.errors, []);
     assert.equal(h.mutations.length, writes, 're-adding is a write-free no-op');
     assert.equal(h.prepareCalls, backups);
+  } finally { h.cleanup(); }
+});
+
+test('an unknown main-route model on a multi-protocol route is skipped with a warning', async () => {
+  const h = makeHarness({ modelList: FULL_LIST, llmModels: { 'opencode-go': [{ id: 'kimi-k3' }] } });
+  h.document['llm-pi-ai'].providers['opencode-go'].models = [];
+  try {
+    const before = structuredClone(h.document);
+    const outcome = await checkedApply(h, { 'opencode-go': ['deepseek-flash'] });
+    assert.equal(outcome.errors.length, 0);
+    assert.equal(outcome.applied[0].added, 0);
+    assert.match(outcome.warnings[0].reason, /不在本机模型目录中/);
+    assert.deepEqual(h.document, before, 'a skipped model must never write a provider-level transport');
+    assert.equal(h.mutations.length, 0);
+  } finally { h.cleanup(); }
+});
+
+test('an unknown main-route model is skipped even when explicit rows already exist', async () => {
+  const h = makeHarness({ modelList: FULL_LIST, llmModels: { 'opencode-go': [{ id: 'kimi-k3' }] } });
+  try {
+    const before = structuredClone(h.document['llm-pi-ai'].providers['opencode-go']);
+    const outcome = await checkedApply(h, { 'opencode-go': ['deepseek-flash'] });
+    assert.equal(outcome.errors.length, 0);
+    assert.match(outcome.warnings[0].reason, /本次未保存这些模型/);
+    assert.deepEqual(h.document['llm-pi-ai'].providers['opencode-go'], before);
+    assert.equal(h.mutations.length, 0);
   } finally { h.cleanup(); }
 });
 

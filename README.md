@@ -4,11 +4,36 @@
 
 **查看、启动和检查都不会修改模型配置；只有点击「保存全部变更」才写入。** 不自动删除模型，不自动切换会话模型，不覆盖手工维护的协议、参数和 headers。
 
-> 独立第三方插件，不是 DeepSeek 官方项目。当前版本 **0.12.3**，声明兼容 DSH kernel `>=0.2.2-rc.1 <0.3.0-0`。
+> 独立第三方插件，不是 DeepSeek 官方项目。当前版本 **0.12.4**，声明兼容 DSH kernel `>=0.2.2-rc.1 <0.3.0-0`。
+
+## 0.12.4：修复「保存了好几次都报错」
+
+0.12.3 之前，部分 Kimi Coding 配置会出现一种很隐蔽的保存失败：面板只显示通用文案
+
+```text
+操作失败；配置和上次成功目录均已保留，请重试
+```
+
+但真实异常是宿主校验器抛出的：
+
+```text
+llm-pi-ai: provider "kimi-coding" model "k3.1-pro" sets compat
+"forceAdaptiveThinking", but its api is "openai-completions"...
+```
+
+原因是 `kimi-coding` 路由声明了 Anthropic 的 `compat`，但本机模型目录把 `k3.1-pro` 归为 `openai-completions`；保存时整个 `llm-pi-ai` 配置段校验失败，插件又把异常折叠成通用文案，于是同一组里的 kimi-coding、openai、opencode 看起来一起失败。
+
+0.12.4 的修复分三层：
+
+1. **单协议路由写清传输。** 当路由只声明一种协议、带有 route-wide `compat`、本次确实改动模型，且供应商没有显式 `api` 时，保存会同时固定该协议和对应 `baseURL`。Kimi Coding 因此写成 `api: anthropic-messages`、`baseURL: https://api.kimi.com/coding`；Anthropic SDK 拼出的真实请求是 `/coding/v1/messages`，而不是会 404 的 `/coding/v1/v1/messages`。
+2. **目录发现仍走 `/coding/v1`。** 固定调用端点是 `/coding`，但检查更新时继续请求 `/coding/v1/models`；否则保存成功后下一次检查会错误地请求 `/coding/models` 并退回 models.dev。
+3. **多协议网关不再被强行统一。** OpenCode Go 同时包含 Anthropic、Gemini、OpenAI 等不同协议的已知模型，provider 级 `api` 会把它们全部改错。最终行为是：**已知模型正常保存；本机目录查不到的模型跳过，并在保存结果里明确 warning**，不会写入猜测的传输，也不会让一个未知模型拖垮整组。
+
+这是一次**有意的部分保存**：例如默认选中的 20 个 OpenCode Go 新模型里，12 个已知模型会保存，8 个目录外模型会跳过并提示。请阅读 warning；如果要保存被跳过的模型，先在供应商配置中显式设置 `api`/`baseURL`，或取消勾选它们。
 
 ## 它解决什么问题
 
-DSH 的模型设置只知道「当前配置里写了什么」，不知道「供应商现在提供了什么」。于是常见三种困境：
+DSH 的模型设置只知道「当前配置里写了什么」，不知道「供应商现在提供了什么」。常见困境：
 
 - 新加了 OpenAI、Kimi 或智谱的 API，插件列表里却看不到这个供应商；
 - 上游更新了模型目录，你不知道多了哪些、少了哪些；
@@ -25,7 +50,7 @@ dsh-model-sync 补上这一层：**动态发现 → 拉取官方目录 → 计�
 | 未读变化 | 相对「上次完整查看的目录」计算新增/移除，重复检查不累加，跨刷新与重启保留 |
 | 「新增」标记 | 首次展开时标出新增模型，保留到本次收起；已启用的新模型同样会标 |
 | 不适用模型过滤 | 非对话端点、重复日期快照、无法判定协议的行不进入主列表，只在诊断中计数 |
-| 协议补全 | OpenAI 新模型尚未进入 DSH SDK 目录时仍可选择，保存时显式写入供应商协议并提示 |
+| 协议处理 | OpenAI 官方新模型可显式补协议；单协议路由安全固定传输；多协议网关不猜测未知模型的协议 |
 | 布局与排序 | 单一厂商官方供应商双列网格；多厂商网关保持分组卡片；全部按显示名自然排序 |
 | 安全保存 | 版本 CAS、写前备份、凭据作用域隔离、部分成功精确回执、失败保留旧目录 |
 | 系统代理开关 | 面板顶部右侧的滑动开关：开启后宿主进程所有走全局 `fetch` 的请求（目录检查、对话补全、MCP HTTP）都走系统代理，关闭后恢复直连；默认开启 |
@@ -40,16 +65,16 @@ dsh-model-sync 补上这一层：**动态发现 → 拉取官方目录 → 计�
 打开 **DSH → 设置 → 插件 → 安装**，输入：
 
 ```text
-github:chen1pengvincent/dsh-model-sync-plugin#v0.12.3
+github:chen1pengvincent/dsh-model-sync-plugin#v0.12.4
 ```
 
 也可以让当前 profile 的 `plugin_manager` 安装：
 
 ```json
-{"action":"install_bundle","target":"github:chen1pengvincent/dsh-model-sync-plugin#v0.12.3"}
+{"action":"install_bundle","target":"github:chen1pengvincent/dsh-model-sync-plugin#v0.12.4"}
 ```
 
-安装后**完全退出并重新打开 DSH**，再硬刷新页面（macOS：`Cmd+Shift+R`）。以返回的 `application`、`warnings`、`nextStep` 为准，不要只看「安装成功」；不要手工编辑 profile 清单、依赖或链接。
+安装后**完全退出并重新打开 DSH**（Host 模块只在 Harness 重启后重新加载；只刷新页面不够），再硬刷新页面（macOS：`Cmd+Shift+R`）。以返回的 `application`、`warnings`、`nextStep` 为准，不要只看「安装成功」；不要手工编辑 profile 清单、依赖或链接。
 
 ### 从源码安装
 
@@ -69,10 +94,8 @@ git clone https://github.com/chen1pengvincent/dsh-model-sync-plugin.git
 
 ```json
 {"action":"remove_bundle","target":"dsh-model-sync"}
-{"action":"install_bundle","target":"github:chen1pengvincent/dsh-model-sync-plugin#v0.12.3"}
+{"action":"install_bundle","target":"github:chen1pengvincent/dsh-model-sync-plugin#v0.12.4"}
 ```
-
-Host 模块只有在 Harness 重启后才会重新加载；只刷新页面不会替换已经在运行的 Host 代码。
 
 ## 使用
 
@@ -83,6 +106,13 @@ Host 模块只有在 Harness 重启后才会重新加载；只刷新页面不会
 3. **读摘要**：卡片显示类似 **目录 42 个 · 变化 5 项（新增 3 / 移除 2）**；有被过滤的行时追加 **· 已过滤 7**。
 4. **展开选择**：展开卡片，搜索、勾选要添加的模型，取消勾选要移除的模型。单一厂商官方供应商为双列网格，多厂商网关按厂商分组。
 5. **保存**：在列表底部点击「保存全部变更」。保存后卡片保持展开，并逐项显示成功、失败或后续刷新警告。
+
+### 保存行为与 warning
+
+- 每个 settings namespace 原子提交；不同 namespace 可能部分成功，界面按供应商逐项显示。
+- 单协议路由的首次模型保存可能同时写入供应商级 `api` 与 `baseURL`；这是为了让声明的 `compat` 与真实传输一致，不是把目录元数据整段抄进配置。
+- 多协议路由（如 OpenCode Go）不会写入 provider 级 `api`/`baseURL`。本机模型目录里没有的模型会被跳过，并在 `lastApply.warnings` 与界面 warning 中列出；已知模型照常保存。
+- 如果有 warning，请先读清楚再决定是否重试；重复提交不会修复目录外模型，只会产生新的备份。
 
 ### 系统代理开关
 
@@ -199,29 +229,33 @@ sessionHeader:
 
 ## 更新记录
 
+### v0.12.4
+
+- **修复 Kimi Coding 保存失败。** 单协议且带 route-wide `compat` 的路由，在本次改动模型、供应商未显式设置 `api` 时，保存会同时固定协议与 `baseURL`；Kimi Coding 写入 `api: anthropic-messages`、`baseURL: https://api.kimi.com/coding`，避免目录的 `openai-completions` 与路由 `compat` 冲突，也避免 api-only 方案产生 `/coding/v1/v1/messages` 404。
+- **保留目录发现端点。** 固定 wire base 为 `/coding` 后，检查更新仍使用 `/coding/v1/models`，不会退化为 `/coding/models` 404/models.dev 回退。
+- **多协议网关安全跳过未知模型。** OpenCode Go 等路由不再写 provider 级 `api`/`baseURL`；已知模型正常保存，本机目录没有的模型跳过并在 warning 中列出，避免覆盖 claude/gemini/qwen 等已知模型各自的协议。
+- **覆盖边界。** 自定义 baseURL、显式不兼容 api、仅删除/修复、`compat: null`、尾斜杠归一化都有回归测试和可操作错误。
+- 验证：`378 tests / 375 pass / 3 fail`（3 个失败是 `tests/state.test.js` 的 Electron helper 基线问题，干净基线相同）；controller `55/55`。隔离真实宿主用用户原始配置一次保存 kimi 6 + openai 1 + opencode 37 + opencode-go 12，`errors: []`，一条 warning 列出 8 个跳过项；保存后六家 provider 检查全部 `ok`。
+- 两份独立对抗式审查对最终 `07da8288…` 均为 PASS。
+
 ### v0.12.3
 
-- **系统代理开关改为紧凑滑杆。** 开关移到卡片最右侧并垂直居中；整块固定 66 px 高（文字列 22 px 标题行 + 4 px 间距 + 18 px 状态行），开关切换时高度不变，开启时出现的绿字也留在同一块内。
-- **只保留异常状态文字。** 不再显示「已开启」「已关闭」；正常开启时只有绿色状态行，关闭时同一行变为「已关闭：目录检查与对话都直连。」；未接管时标「未接管」并显示原因，旧宿主标「不可用」。
-- **修复状态误报。** `/proxy` 返回的是 `{ ..., proxy: status }`，实际接管结果在 `next.proxy.active`；旧代码读取顶层 `next.active`，成功开启后仍可能显示「未接管」。现在按嵌套字段判断，并在请求返回后立刻更新本地代理状态，不用等目录检查结束。
-- **无障碍与交互。** `role="switch"`、`aria-checked`、`aria-describedby` 保留；Tab 可聚焦，Space / Enter 可切换，键盘焦点显示 2 px 蓝色轮廓；状态行保留 `role="status" aria-live="polite"`。
-- 验证：`node --test` 共 368 项；标准 Node 24 下通过，本机以 Electron helper 作为 Node 运行时，3 个 `tests/state.test.js` 跨进程夹具因 helper 退出 64 失败（干净基线相同，不是本次改动引入）。真实 `lib/client.js` + React 18 的无头浏览器夹具验证了 66 px 固定高度、开关右对齐/垂直居中、开/关/未接管/旧宿主/错误状态、Tab + Space 和标签点击。
+- 系统代理开关改为紧凑滑杆：开关右对齐、垂直居中，整块固定 66 px 高；不再显示「已开启」「已关闭」，只保留异常状态「未接管 / 不可用」。
+- 修复代理状态误报：`/proxy` 的接管结果在 `next.proxy.active`，并在请求返回后立即更新本地状态，避免目录检查期间绿字与开关不同步。
+- `role="switch"`、`aria-checked`、`aria-describedby`、Tab + Space/Enter 与焦点轮廓保留。
 
 ### v0.12.2
 
 - 检查更新时重新探测系统代理：每次检查先 `reconcileProxy()`，代理换端口或换软件时自动切换；端点没变就不重装，不抖掉流式对话。
 - 探测读启动时的环境快照，不读自己写回去的变量；瞬时 TCP 失败保留可用 dispatcher，换 dispatcher 不等待旧 `close` 排空。
-- 测试 368 项（较 0.12.1 新增 11 条）。
 
 ### v0.12.1
 
 - 评审修正：默认开启不再覆盖宿主既有策略；保留代理凭据、`https://` 与 IPv6 写法；`dispose()` 等待安装并卸载；卸载期间 `POST /proxy` 返回 409；先持久化选择再安装。
-- 面板区分 `enabled` 与 `active`，未接管时说明原因；`POST` 只接受 `application/json`。
 
 ### v0.12.0
 
 - 新增「通过系统代理访问模型服务」开关：重新安装 Harness 的全局 undici dispatcher，目录检查与对话一起走系统代理；关闭时安装显式直连策略；默认开启并持久化。
-- 新增 `lib/proxy-policy.js` 与 `GET/POST /model-sync/api/proxy`；安装前做 TCP 存活探测，切换时先归还旧策略。
 
 ### v0.11.x
 
@@ -230,10 +264,14 @@ sessionHeader:
 
 ## 已知限制
 
+- **部分保存**：多协议路由的目录外模型会被跳过并 warning；这是为了防止写错协议。需要保存时，请显式配置供应商 `api`/`baseURL` 或取消勾选。主提示可能显示「已保存：添加 0 个模型」，请以 warning 为准。
+- **通用错误文案仍在**：本次修复移除了当前触发点，但 `applySelection` 对组内其他未知异常的兜底仍可能显示「操作失败；配置和上次成功目录均已保留」。遇到时请保留 `state.json` 和界面提示。
+- **目录读取瞬时失败**：极少数情况下 `listModels` 抛错会使本次新增被保守跳过并标记为未知；重试检查/保存即可，不会写入错误传输。
+- **compatByModel-only 路由**：只声明 `compatByModel` 的单协议路由目前不做 provider 级固定，未来若出现未知模型仍可能落入通用错误；当前内置路由没有这种形态。
 - 目录「变化」只统计模型 ID 的新增与移除；仅名称、上下文窗口等元数据变化不增加未读数。
 - 从 0.9.6 迁移的按名称归属，在共享 `DSH_HOME` 下可能把同名路由视为插件拥有；需要严格隔离时使用独立 profile 目录。
-- 原生编辑器先保存并增加同 namespace 版本时，随后提交的待移除会被 CAS 安全拒绝。请回到「设置 → 模型更新」重新检查并重新勾选，插件不会自动重基；原生一次保存与后续移除不是同一原子事务。
-- 首次为某供应商写入 `api`（OpenAI 协议补全）会改变该供应商的配置作用域，未读基线随之重置一次。
+- 原生编辑器先保存并增加同 namespace 版本时，随后提交的待移除会被 CAS 安全拒绝。请回到「设置 → 模型更新」重新检查并重新勾选，插件不会自动重基。
+- 首次为某供应商写入 `api` 会改变该供应商的配置作用域，未读基线随之重置一次。
 - 系统代理只覆盖 HTTP/HTTPS；SOCKS 与 PAC 由 Harness 的 `@deepseek-ai/dsh-http-proxy` 决定，本插件不做转换。Windows / Linux 只读环境变量，不读系统设置（未验证）。
 - Harness 自带的 `web_fetch` 工具直接 `import('undici')`，不经过全局 dispatcher，因此不受这个开关影响。
 - 本机无法对运行中的 DSH 窗口做截图验收（当前会话鉴权不可用）。组件级使用真实 `lib/client.js` + React 18 夹具验证了布局与交互，但未替代完整宿主里的目视验收。
@@ -246,9 +284,9 @@ node --check lib/index.js
 node --check lib/client.js
 ```
 
-使用 Node 内置测试运行器；测试中的供应商 API 为受控响应，不消耗模型额度。当前测试套件 **368 项**，覆盖动态供应商发现、八家目录协议、分页与错误保护、目录净差/首次基线/精确版本已读、前端标记生命周期、保存 CAS、手工模型保护、部分成功、跨进程状态并发、不适用模型过滤、重复快照折叠、协议补全与布局排序。
+使用 Node 内置测试运行器；测试中的供应商 API 为受控响应，不消耗模型额度。当前测试套件 **378 项**（`375 pass / 3 fail`），覆盖动态供应商发现、八家目录协议、分页与错误保护、目录净差/首次基线/精确版本已读、前端标记生命周期、保存 CAS、手工模型保护、部分成功、跨进程状态并发、不适用模型过滤、重复快照折叠、协议补全、协议/端点固定与多协议跳过。
 
-本机测试环境以 Electron helper 作为 Node 运行时，`tests/state.test.js` 的 3 个「独立进程」用例会因 `process.execPath` 是 Electron helper（退出码 64）失败；`git archive HEAD` 的干净基线表现相同。使用标准 Node.js 24+ 运行即可全部通过。
+本机测试环境以 Electron helper 作为 Node 运行时，`tests/state.test.js` 的 3 个「独立进程」用例会因 `process.execPath` 是 Electron helper（退出码 64）失败；`git archive` 的干净基线表现相同。使用标准 Node.js 24+ 运行即可全部通过。
 
 实际 DSH 实机验证与不能证明的事项见[验证记录](docs/ecosystem.md)。**mock 测试通过不等于八家平台的真实账户都已验证**：当前实机只配置并检查了 OpenAI、DeepSeek、Kimi Coding、OpenCode、OpenCode Go、OpenRouter。
 
