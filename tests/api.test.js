@@ -18,20 +18,25 @@ function apiHarness(controller) {
   assert.equal(registerApi({ register(value) { route = value; return dispose; } }, controller), dispose);
   assert.equal(route.kind, 'prefix');
   assert.equal(route.path, '/model-sync');
-  return async function request(path, { method = 'POST', body, raw, chunks } = {}) {
+  return async function request(path, { method = 'POST', body, raw, chunks, headers } = {}) {
     const bytes = raw === undefined ? (body === undefined ? Buffer.alloc(0) : Buffer.from(JSON.stringify(body))) : Buffer.from(raw);
     const pieces = chunks ?? (bytes.length ? [bytes] : []);
-    const req = { method, url: `/model-sync/api${path}`, async *[Symbol.asyncIterator]() { yield* pieces; } };
+    const req = {
+      method,
+      url: `/model-sync/api${path}`,
+      headers: headers ?? { 'content-type': 'application/json' },
+      async *[Symbol.asyncIterator]() { yield* pieces; },
+    };
     let status;
-    let headers;
+    let responseHeaders;
     let text;
     const res = {
-      writeHead(code, values) { status = code; headers = values; },
+      writeHead(code, values) { status = code; responseHeaders = values; },
       end(value) { assert.equal(text, undefined, 'response ends once'); text = String(value); },
     };
     await route.handler(req, res);
     assert.equal(typeof text, 'string', 'handler must produce a response');
-    return { status, headers, text, body: JSON.parse(text) };
+    return { status, headers: responseHeaders, text, body: JSON.parse(text) };
   };
 }
 
@@ -182,7 +187,15 @@ test('the system-proxy switch is readable and requires an explicit boolean on wr
     assert.equal(rejected.status, 400, JSON.stringify(body));
     assert.match(rejected.body.error, /布尔值/);
   }
-  assert.equal((await request('/proxy', { body: { enabled: false } })).status, 200);
+  // A cross-site page can send text/plain without a preflight, so this route
+  // only accepts the JSON type the panel actually sends.
+  const before = calls.length;
+  for (const type of ['text/plain', 'application/x-www-form-urlencoded', '']) {
+    const wrongType = await request('/proxy', { body: { enabled: true }, headers: { 'content-type': type } });
+    assert.equal(wrongType.status, 415, type);
+    assert.equal(calls.length, before, 'a rejected media type never reaches the controller');
+  }
+  assert.equal((await request('/proxy', { body: { enabled: false }, headers: { 'content-type': 'application/json; charset=utf-8' } })).status, 200);
   assert.deepEqual(calls.map((item) => item.name), ['proxyStatus', 'setProxyEnabled']);
   assert.deepEqual(calls[1].args, [false]);
 });

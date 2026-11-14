@@ -4,7 +4,7 @@
 
 **查看、启动和检查都不会修改模型配置；只有点击「保存全部变更」才写入。** 不自动删除模型，不自动切换会话模型，不覆盖手工维护的协议、参数和 headers。
 
-> 独立第三方插件，不是 DeepSeek 官方项目。当前版本 **0.12.0**，声明兼容 DSH kernel `>=0.2.2-rc.1 <0.3.0-0`。
+> 独立第三方插件，不是 DeepSeek 官方项目。当前版本 **0.12.1**，声明兼容 DSH kernel `>=0.2.2-rc.1 <0.3.0-0`。
 
 ## 它解决什么问题
 
@@ -66,7 +66,7 @@ dsh-model-sync 补上这一层：**动态发现 → 拉取官方目录 → 计�
 
 安装是否热应用，以返回的 `application`、`warnings`、`nextStep` 为准，不要只看“安装成功”。不要手工编辑 profile 清单、依赖或链接。
 
-从旧版本升级时先 `remove_bundle` 再 `install_bundle`。已发布的最新版本是 tag `v0.12.0`（系统代理开关）；可从该 tag 安装，或用 `github:chen1pengvincent/dsh-model-sync-plugin#v0.12.0` 安装。
+从旧版本升级时先 `remove_bundle` 再 `install_bundle`。已发布的最新版本是 tag `v0.12.1`（系统代理开关 + 评审修正）；可从该 tag 安装，或用 `github:chen1pengvincent/dsh-model-sync-plugin#v0.12.1` 安装。
 
 ## 使用
 
@@ -174,6 +174,16 @@ sessionHeader:
 ```
 
 ## 更新记录
+
+### v0.12.1
+
+- 评审修正（`v0.12.0` 的三处真实缺陷）：**默认开启不再覆盖宿主既有策略**——探测不到代理、或探测到的代理连不上时，开关只报告原因并保持 Harness 启动时的网络设置，不再安装显式直连；只有用户手动关闭才安装直连策略。
+- 代理值解析改为与 Harness 包同语义：支持 `https://` 代理、保留用户名/密码、支持 IPv6 方括号写法；状态/日志/面板只显示 `***@host:port`，密码不进任何返回值。
+- 探测改为候选列表（`https_proxy` → `http_proxy` → `all_proxy` → 系统设置，大小写都认），逐个 TCP 探测取第一个可用的，避免失效的 `HTTPS_PROXY` 掩盖可用的 `HTTP_PROXY`；系统例外列表与 `NO_PROXY` 会传给 Harness 包。
+- `dispose()` 会等待进行中的安装并把它卸掉（此前可能留下无主的 dispatcher）；卸载中调用 `POST /proxy` 返回 409 而不是假成功。
+- 先持久化用户选择再安装策略：安装失败时重启仍会重试用户的意图，写盘失败也不会让进程带着未保存的代理运行。
+- 面板文案与实际状态一致：`enabled` 但未接管时显示「已开启（未接管）」并给出原因；状态行加 `role="status" aria-live="polite"` 与 `aria-describedby`。`POST` 只接受 `application/json`（跨站 `text/plain` 简单请求直接 415）。
+- 验证：`node --test` 357/357；真实 Electron 运行时开关 on → `fetch` 200（481ms）、目录 200（413ms）；off → 重新超时；`dispose()` 后 `installed=false`。
 
 ### v0.12.0
 

@@ -116,3 +116,15 @@ await dispose(); // 恢复到安装前的 dispatcher
 - 安装前做 0.8 秒 TCP 存活探测：代理没在跑时安装显式直连策略并说明原因，而不是把整个进程指向一个死端口。
 - 验证：`node --test` 352/352（新增 15 条，含「切换前先归还旧策略」「替换失败也要回到 Harness 自己的路由」）；真实安装后 `fetch('https://generativelanguage.googleapis.com/v1beta/models')` 从 10.5s 超时变为 477ms/200，`dispose()` 后重新超时；OpenAI 端点识别为 `openai-completions` 并经代理收到 401（本机 key 无效，传输已通）。
 - 未验证：需要认证的代理（`Proxy-Authorization` 由 Harness 策略处理）、SOCKS/PAC、Windows/Linux 系统代理。
+
+## 0.12.1：系统代理开关的三处评审修正
+
+0.12.0 发布后的对抗式评审确认「可以装、但有三处必须改」，0.12.1 是修正版：
+
+1. **不再替用户做决定。** 0.12.0 在「默认开启 + 探测不到代理」时安装空 Map（显式直连），会覆盖 Harness 启动时已经装好的代理——那些从没碰过开关、靠启动环境代理工作的人会突然断网。0.12.1 改成：探测不到、或探测到的代理连不上，都**不安装任何策略**，只报告原因并保持启动时的设置；只有用户手动关闭才安装显式直连。
+2. **凭据与 https / IPv6。** 0.12.0 用 `http://${host}:${port}` 重建代理地址，丢掉用户名密码（安装后 `process.env` 被改写成无凭据的值，所有请求 407），也拒绝 `https://` 代理与 `[::1]` 写法。0.12.1 的 `parseHarnessProxy()` 保留凭据、支持 http/https 与 IPv6，状态里只暴露 `***@host:port`。
+3. **dispose 与安装竞态。** 0.12.0 的 `dispose()` 可能在安装落地前清掉 `disposer`，卸载后留下没人拥有的 dispatcher。0.12.1 让 `dispose()` 等待 `pending` 链、并在安装返回后检查 `disposed` 立即卸载；卸载期间 `POST /proxy` 返回 409。
+
+顺带修正：候选列表探测（失效的 `HTTPS_PROXY` 不再掩盖可用的 `HTTP_PROXY`）、`NO_PROXY`/系统例外列表透传、先持久化再安装、面板区分「已开启」与「已开启（未接管）」、`role="status"`/`aria-live`、`POST` 只接受 `application/json`。
+
+验证（真实 Electron 运行时，同一套 asar）：开关 on → `fetch` 200 / 481ms、目录 200 / 413ms；off → 重新超时；`dispose()` 后 `installed=false`；`node --test` 357/357。
