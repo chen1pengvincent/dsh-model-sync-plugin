@@ -4,7 +4,7 @@
 
 ## 当前范围
 
-- 插件工作版本：`0.11.0`；当前宿主 kernel：`0.2.2-rc.1`。
+- 插件工作版本：`0.11.1`；当前宿主 kernel：`0.2.2-rc.1`。
 - 声明兼容范围：`>=0.2.2-rc.1 <0.3.0-0`。未承诺旧 kernel 或另一套 Next GUI 的兼容性。
 - 供应商从公开 `llm.listConfigurableProviders()` 和各实例精确的 settings namespace/path 发现；调用凭据通过 Host credentials 服务解析。
 - 官方目录与 DSH SDK 静态模型表分开。八家具体来源、区域、产品路径和限制见 [README](../README.md#八家官方平台)。智谱公开 schema 不等于账户可用性验证；旧 Llama API 不会被自动迁移。
@@ -78,3 +78,18 @@ node --check lib/client.js
 ## 历史证据（不是 0.11.0 验收）
 
 保留旧文档中的事实范围：2026-10-21 在隔离 DSH_HOME、Desktop 2.0.18/kernel 0.2.1-rc.2 中验证过旧插件安装、命令/API、设置入口和无头 Chromium；2026-10-24 验证过旧版 OpenCode 模型分组；2026-10-25 验证过旧版面板及模型选择器。旧版声称 console 无 error、兼容预检能拒绝不支持版本，这些均不是本次重新执行的结果。
+
+## 0.11.1：受限网络下的官方目录（系统代理）
+
+**反例（0.11.0，2026-11-14 实测）**：本机直连 `generativelanguage.googleapis.com` 在 10.5 秒后以 `UND_ERR_CONNECT_TIMEOUT` 失败，面板因此显示「检查失败：官方目录请求或响应解析失败；保留上次成功目录。」；同一台机器经系统代理 `127.0.0.1:7897` 用同一把 `GOOGLE_API_KEY` 请求 `/v1beta/models` 返回 HTTP 200 与 64 个模型。宿主进程不使用系统代理（`web_fetch` 同样 `TypeError: fetch failed`），所以问题在传输层，不在 Google 适配器。
+
+**改动**：新增 `lib/net-proxy.js`，只替换目录请求的传输，不动设置、凭据与模型写入路径：
+
+- 代理发现顺序：`HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`（含小写）与 `NO_PROXY` → macOS `scutil --proxy`（含 `ExceptionsList` 与 IPv4 CIDR）；
+- 直连优先：直连失败立即改走代理；直连 2.5 秒未返回则并行对冲，先成功者生效、另一方取消；代理不可用时行为与旧版本一致；
+- 只实现 HTTP 代理（https 走 CONNECT + TLS），SOCKS/PAC 明确不支持；
+- `lib/sync.js` 的三处请求（官方目录、legacy `/models`、models.dev）统一走该传输；`DSH_MODEL_SYNC_DEBUG_PROXY=1` 输出选路与失败原因。
+
+**验证**：`node --test` 337/337（基线 324 + 新增 13 条：代理 URL/`scutil` 解析、例外域名与 CIDR、CONNECT 隧道、chunked、abort、对冲、回退、直连优先，以及「对冲后两侧都失败必须快速拒绝」「`redirect: 'error'` 下 3xx 必须当传输错误」两条回归）；真实 Google 目录 `source=official-api, pages=1, models=64`，耗时 2.98 秒（改动前为失败）。
+
+**仍未验证**：Windows/Linux 的系统代理（只读环境变量）、SOCKS 与 PAC、需要认证的代理（`http://user:pass@host:port` 已实现但无实机）。Gemini 的**对话**请求由 DSH 自身的 LLM 传输发起，不受本插件影响；如果宿主同样无法直连 Google，对话仍需一个宿主可达的端点。

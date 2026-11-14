@@ -4,7 +4,7 @@
 
 **查看、启动和检查都不会修改模型配置；只有点击「保存全部变更」才写入。** 不自动删除模型，不自动切换会话模型，不覆盖手工维护的协议、参数和 headers。
 
-> 独立第三方插件，不是 DeepSeek 官方项目。当前版本 **0.11.0**，声明兼容 DSH kernel `>=0.2.2-rc.1 <0.3.0-0`。
+> 独立第三方插件，不是 DeepSeek 官方项目。当前版本 **0.11.1**，声明兼容 DSH kernel `>=0.2.2-rc.1 <0.3.0-0`。
 
 ## 它解决什么问题
 
@@ -28,6 +28,18 @@ dsh-model-sync 补上这一层：**动态发现 → 拉取官方目录 → 计�
 | 协议补全 | OpenAI 新模型尚未进入 DSH SDK 目录时仍可选择，保存时显式写入供应商协议并提示 |
 | 布局与排序 | 单一厂商官方供应商双列网格；多厂商网关保持分组卡片；全部按显示名自然排序 |
 | 安全保存 | 版本 CAS、写前备份、凭据作用域隔离、部分成功精确回执、失败保留旧目录 |
+| 受限网络 | 官方目录请求先直连；直连失败或过慢时按环境变量与 macOS 系统代理并行重试，先成功者生效 |
+
+## 网络受限环境（系统代理）
+
+官方目录请求默认直连，只有直连不可用或明显过慢时才启用代理；未配置代理的机器上行为与旧版本完全一致：
+
+1. `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`（含小写）与 `NO_PROXY` 优先；
+2. macOS 上读取系统代理设置（`scutil --proxy`，含例外域名与 IPv4 CIDR 段）；
+3. 直连报错时立即改走代理；直连 2.5 秒仍未返回时并行尝试代理，先成功者生效，另一方被取消；
+4. 只支持 HTTP 代理（https 经 CONNECT 隧道）；SOCKS 与 PAC 不支持，代理不可用时自动回退直连。
+
+排查时设置 `DSH_MODEL_SYNC_DEBUG_PROXY=1`，插件会把选中的代理与失败原因写到宿主 stderr。
 
 ## 安装
 
@@ -39,7 +51,7 @@ dsh-model-sync 补上这一层：**动态发现 → 拉取官方目录 → 计�
 
 安装是否热应用，以返回的 `application`、`warnings`、`nextStep` 为准，不要只看“安装成功”。不要手工编辑 profile 清单、依赖或链接。
 
-从旧版本升级时先 `remove_bundle` 再 `install_bundle`。**v0.11.0 已发布为 GitHub Release（tag `v0.11.0`）**；可从该 tag 安装，或继续使用本地仓库目录安装。
+从旧版本升级时先 `remove_bundle` 再 `install_bundle`。已发布的最新版本是 tag `v0.11.1`（受限网络下的官方目录检查）；可从该 tag 安装，或用 `github:chen1pengvincent/dsh-model-sync-plugin#v0.11.1` 安装。
 
 ## 使用
 
@@ -145,6 +157,22 @@ sessionHeader:
   mode: uuid             # uuid（默认）或 session-id
   providers: [opencode-go, opencode]
 ```
+
+## 更新记录
+
+### v0.11.1
+
+- 受限网络下也能建立官方目录：新增 `lib/net-proxy.js`，目录 / legacy `/models` / models.dev 三处请求支持 `HTTPS_PROXY`、`HTTP_PROXY`、`ALL_PROXY`（含小写）与 `NO_PROXY`，没有环境变量时读取 macOS 系统代理（`scutil --proxy`，含例外列表与 IPv4 CIDR）。
+- 选路是「直连优先，失败即改代理；直连 2.5 秒未回则并行对冲，先成功者生效」，代理不可用时行为与旧版完全一致；`DSH_MODEL_SYNC_DEBUG_PROXY=1` 可打印选路与失败原因。
+- 修复两条边界：对冲之后两侧都失败时必须在毫秒级返回 `REQUEST_FAILED`（此前要等到 20 秒超时）；`redirect: 'error'` 下的 3xx 必须当传输错误，而不是普通 HTTP 状态。
+- 凭据只出现在 TLS 密文里：CONNECT 请求头除 `Proxy-Authorization` 外不含任何密钥。
+- 验证：`node --test` 337/337（基线 324 + 新增 13 条）；真实 Google 目录经系统代理 `pages=1, models=64`，`gemini-2.5-flash` 可选。未验证：Windows/Linux 系统代理、SOCKS/PAC、需要认证的代理。
+
+### v0.11.0
+
+- 非对话、重复日期快照与协议未知行不进入主列表与未读基线，只在诊断里计数。
+- OpenAI SDK 未收录的聊天模型在选择保存时写入供应商级 `api: openai-responses` 并提示协议变更。
+- 单厂商官方供应商使用双列网格并按显示名自然排序；多厂商网关保留分组卡片。
 
 ## 已知限制
 
