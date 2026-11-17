@@ -566,17 +566,17 @@ test('a model added while routed is attributed, remembered, and blocks undo', as
   }
 })
 
-test('a model no protocol claims is rolled back instead of left unroutable', async () => {
-  // The fake document accepts any write, like a host whose validation lags; the
-  // read-back and the attribution probe are what stop a half-served model.
-  const { controller, document, dir } = await controllerFor({ probe: { attribution: MIXED } })
+test('a model no protocol claims is refused before writing', async () => {
+  const { controller, document, writes, dir } = await controllerFor({ probe: { attribution: MIXED } })
   try {
     await controller.routeGateway({ provider: 'google' })
     controller.store.data.checks = {
       google: { at: Date.now(), status: 'ok', protocol: 'openai-completions', added: [{ id: 'ghost' }], gone: [] },
     }
 
-    await assert.rejects(() => controller.apply({ provider: 'google' }), /没说用哪种协议服务/)
+    const count = writes.length
+    await assert.rejects(() => controller.apply({ provider: 'google' }), /模型配置未写入/)
+    assert.equal(writes.length, count)
     assert.equal(document[PIAI].providers.google.models, undefined)
     assert.deepEqual(controller.store.data.gateway.entries.google.addedAfterRouting, undefined)
   } finally {

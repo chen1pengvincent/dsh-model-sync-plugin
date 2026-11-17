@@ -80,7 +80,7 @@ test('a check records the protocol, the exit, and only the ids that are new', as
   assert.equal(row.protocol, 'google-generative-ai')
   assert.equal(row.via, 'proxy')
   assert.equal(row.upstreamCount, 2)
-  assert.deepEqual(row.added, [{ id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' }])
+  assert.deepEqual(row.added, [{ id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', blocked: '待确认模型调用协议' }])
   assert.deepEqual(row.gone, [])
   assert.ok(calls[0].proxy !== undefined, 'the check must be handed the proxy it should use')
   assert.equal(calls[0].apiKey, 'k')

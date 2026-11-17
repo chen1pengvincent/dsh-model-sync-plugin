@@ -285,15 +285,9 @@ async function main() {
     console.log(`\n== 3. ${target} 没有新增模型，跳过写入演练 ==`)
   }
 
-  console.log('\n== 4. 如果点「删除合成供应商」，会删什么 ==')
-  writes.length = 0
-  try {
-    const pruned = await controller.prune({})
-    console.log(`  ${pruned.removed.length} 条: ${pruned.removed.map((row) => (typeof row === 'string' ? row : row?.provider ?? JSON.stringify(row))).join(', ')}`)
-    for (const batch of writes) for (const op of batch.ops) console.log(`    ${op.op} ${op.path.join('.')}`)
-  } catch (error) {
-    console.log(`  (${error.message})`)
-  }
+  console.log('\n== 4. 待人工核对的旧版路由 ==')
+  const legacy = controller.legacySiblings()
+  console.log(`  ${legacy.length} 条: ${legacy.map((row) => row.provider).join(', ')}`)
 
   console.log('\n== 5. bili 出口（只记录，不写） ==')
   try {

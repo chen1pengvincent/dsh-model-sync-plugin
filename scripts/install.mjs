@@ -247,7 +247,7 @@ async function main() {
     await writeFile(join(profileDir, 'model-sync-install-failed.txt'), `install did not take effect (${report})\nmanifest backup: ${manifestBackup}\n`)
     throw new Error(`these references did not take effect: ${report}; the previous manifest is at ${manifestBackup}`)
   }
-  console.log('\ninstalled. Restart DSH to load the host half; the panel appears under Settings → 模型更新.')
+  console.log('\ninstalled. Restart DSH to load the host half; the panel appears under Settings → 模型管理.')
   console.log(`undo: node scripts/rollback.mjs            (dry run first, then --apply)`)
 }
 

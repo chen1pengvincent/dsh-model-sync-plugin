@@ -81,6 +81,7 @@ function harness(options = {}) {
   }
 
   const llm = {
+    listProviders: () => [{ id: 'google', name: 'Google' }, { id: 'deepseek-official', name: 'DeepSeek' }],
     listConfigurableProviders: () => [
       { provider: 'google', settingsNs: PIAI, settingsPath: ['providers', 'google'], displayName: 'Google', defaultBaseURL: GOOGLE_BASE, nativeAuth: { env: ['GOOGLE_API_KEY'] } },
       ...Object.keys(options.extraProviders ?? {}).map((provider) => ({
@@ -351,53 +352,41 @@ test('apply is refused before a check has run', async () => {
   await rm(controller.store.dir, { recursive: true, force: true })
 })
 
-test('the synthetic providers of the previous version are found, and only those', async () => {
-  const { controller, document, dir } = await controllerFor({
+test('suffix matches are listed for review without excluding or writing routes', async () => {
+  const { controller, document, writes, dir } = await controllerFor({
     extraProviders: {
-      opencode: { apiKeyEnv: 'OPENCODE_API_KEY', baseURL: 'https://opencode.ai/zen/v1' },
-      'opencode-chat': { displayName: 'opencode · Chat Completions', api: 'openai-completions', baseURL: 'https://opencode.ai/zen/v1' },
-      'opencode-responses': { displayName: 'opencode · Responses', api: 'openai-responses' },
-      // Its parent route is not configured, so this is not a leftover sibling.
-      'opencode-go-messages': { displayName: 'opencode-go · Anthropic Messages', api: 'anthropic-messages' },
+      opencode: {},
+      'opencode-chat': { displayName: 'My separately configured route', baseURL: 'https://separate.example' },
+      'another-messages': {},
     },
   })
   try {
-    const legacy = controller.legacySiblings()
-    assert.deepEqual(legacy.map((row) => row.provider).sort(), ['opencode-chat', 'opencode-responses'])
-
-    // The panel must not offer to manage a key it also offers to delete: that
-    // would invite the user to add models to a provider scheduled to vanish —
-    // and would ask the upstream for its models in the meantime.
-    const managed = (await controller.view()).providers.map((row) => row.provider)
-    assert.equal(managed.includes('opencode-chat'), false, 'a synthesised sibling is not a route to manage')
-    assert.equal(managed.includes('opencode-responses'), false)
-    assert.ok(managed.includes('opencode'), 'its parent route still is')
-    assert.ok(managed.includes('opencode-go-messages'), 'a suffix without its parent is the user\'s own route')
-
-    const result = await controller.prune()
-    assert.deepEqual(result.removed.sort(), ['opencode-chat', 'opencode-responses'])
-    const providers = document[PIAI].providers
-    assert.equal(providers['opencode-chat'], undefined)
-    assert.equal(providers['opencode-responses'], undefined)
-    assert.ok(providers.opencode, 'the parent route survives')
-    assert.ok(providers['opencode-go-messages'], 'a suffix without its parent route is left alone')
-    assert.ok(providers.google, 'the configured route is untouched')
-    assert.equal(result.snapshot !== undefined, true, 'a snapshot is taken before deleting keys')
+    const before = structuredClone(document)
+    const view = await controller.view()
+    assert.deepEqual(view.legacy.map((row) => row.provider), ['opencode-chat'])
+    assert.ok(view.providers.some((row) => row.provider === 'opencode-chat'))
+    assert.ok(view.providers.some((row) => row.provider === 'another-messages'))
+    assert.deepEqual(document, before)
+    assert.deepEqual(writes, [])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
 })
 
-test('pruning twice is a no-op, not an error', async () => {
-  const { controller, dir } = await controllerFor({
-    extraProviders: {
-      opencode: {},
-      'opencode-chat': { api: 'openai-completions' },
-    },
-  })
+test('hiding the only configured model persists without any settings mutation', async () => {
+  const { controller, document, writes, dir } = await controllerFor()
   try {
-    assert.deepEqual((await controller.prune()).removed, ['opencode-chat'])
-    assert.deepEqual((await controller.prune()).removed, [])
+    const before = structuredClone(document)
+    const change = { provider: 'google', id: 'gemini-4-argon', visible: false }
+    assert.deepEqual((await controller.setVisibility([change])).hidden, [['google', 'gemini-4-argon']])
+    await controller.store.load()
+    const result = await controller.displayModels()
+    assert.ok(result.groups.find((row) => row.provider === 'google').models.some((row) => row.id === change.id))
+    assert.deepEqual(result.hidden, [['google', 'gemini-4-argon']])
+    await assert.rejects(() => controller.setVisibility([{ ...change, provider: 'deepseek-official' }]), /清单已变化/)
+    assert.deepEqual((await controller.setVisibility([{ ...change, visible: true }])).hidden, [])
+    assert.deepEqual(document, before)
+    assert.deepEqual(writes, [])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

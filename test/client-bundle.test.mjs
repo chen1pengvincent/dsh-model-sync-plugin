@@ -125,7 +125,7 @@ test('apply registers exactly one settings section and nothing else', async () =
   assert.equal(sections.length, 1)
   assert.equal(sections[0].options.id, 'model-sync')
   assert.equal(sections[0].options.order, 30)
-  assert.equal(sections[0].options.label(), '模型更新')
+  assert.equal(sections[0].options.label(), '模型管理')
   assert.equal(typeof sections[0].component, 'function')
 })
 
@@ -198,7 +198,7 @@ test('the panel renders providers, legacy keys and the bili egress block', async
   // The template is the one the panel had before this rewrite: a summary line, a
   // transport switch, one collapsed card per provider, and a save bar. Nothing
   // here should need a click to read.
-  for (const expected of ['模型更新', '只改已配置供应商的模型清单', 'opencode-go', '已启用 1 个', '上游新增 1', 'generativelanguage.googleapis.com', '127.0.0.1:18787', 'opencode-chat', '保存全部变更']) {
+  for (const expected of ['模型管理', '上游目录', '对话显示', 'opencode-go', '已启用 1 个', '上游尚未加入的模型 1', 'generativelanguage.googleapis.com', '127.0.0.1:18787', 'opencode-chat']) {
     assert.ok(populated.includes(expected), `the populated panel must render "${expected}"`)
   }
 

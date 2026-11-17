@@ -223,7 +223,7 @@ async function main() {
     for (const row of stillThere) console.log(`  ${row}`)
   }
   console.log('\nmodel lists this plugin wrote are configuration, not manifest: to undo them')
-  console.log('open Settings → 模型更新 and use 「恢复适配器默认目录」 per route, or restore a')
+  console.log('open the official Settings → 模型 and compare the current models with a')
   console.log(`snapshot from ${join(profileDir, 'model-sync', 'snapshots')}`)
   console.log(`this rollback is itself reversible: ${beforePath} → ${manifestPath}`)
 }

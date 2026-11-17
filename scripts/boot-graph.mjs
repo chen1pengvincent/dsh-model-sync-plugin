@@ -119,7 +119,7 @@ for (const name of names) {
 }
 
 console.log('')
-console.log(failed ? '❌ 宿主不会挂载本插件的浏览器半边：面板重启后不会出现。' : '✅ 宿主会挂载本插件的浏览器半边：重启后设置里应该出现「模型更新」。')
+console.log(failed ? '❌ 宿主不会挂载本插件的浏览器半边：面板重启后不会出现。' : '✅ 宿主会挂载本插件的浏览器半边：重启后设置里应该出现「模型管理」。')
 
 await rm(scratch, { recursive: true, force: true })
 process.exit(failed ? 1 : 0)

@@ -149,6 +149,15 @@ test('both backup naming schemes count, and near-misses do not', () => {
   assert.equal(isBackupName('.package.json.bak'), true)
 })
 
+test('a previous local link may be restored', () => {
+  const previousLink = 'link:/work/last-local-install'
+  const manifest = installed()
+  manifest.dependencies[PACKAGE] = previousLink
+  manifest.pnpm.overrides[PACKAGE] = previousLink
+  const backup = { name: 'older-local.json', manifest }
+  assert.equal(pickBackup([backup], readRefs(installed())).chosen, backup)
+})
+
 test('a backup taken mid-install is never the revert target', () => {
   // The 07:13 backup on this machine: dependencies already points at the
   // checkout, override and projection still name 0.12.5. Reverting to it would
@@ -162,8 +171,8 @@ test('a backup taken mid-install is never the revert target', () => {
     },
   }
   const clean = { name: '.package.json.2026-11-15T16-22-21-739Z.bak', manifest: previous() }
-  assert.equal(looksLikeThisInstall(readRefs(partial.manifest)), true)
-  assert.equal(looksLikeThisInstall(readRefs(clean.manifest)), false)
+  assert.equal(looksLikeThisInstall(readRefs(partial.manifest), readRefs(installed())), true)
+  assert.equal(looksLikeThisInstall(readRefs(clean.manifest), readRefs(installed())), false)
 
   // Newest first, as the CLI lists them.
   const { chosen, warning } = pickBackup([partial, clean], readRefs(installed()))

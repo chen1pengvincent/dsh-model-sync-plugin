@@ -113,6 +113,7 @@ async function mount(options = {}) {
     },
     setTimeout,
     clearTimeout,
+    __dshModelSyncSelectorVersion: 1,
   }
   vm.createContext(context)
   vm.runInContext(source, context, { filename: 'client.js' })
@@ -214,57 +215,30 @@ function view(overrides = {}) {
   }
 }
 
-test('clearing a card drops every selection in it', async () => {
+test('configured models are read-only in the upstream catalog', async () => {
   const panel = await mount({ view: view(), props: { expandedProvider: 'alpha' } })
-
-  assert.doesNotMatch(panel.text(), /待移除/)
-
-  panel.toggle('m-one')
-  assert.match(panel.text(), /待移除 1/)
-
-  panel.toggle('m-two')
-  assert.match(panel.text(), /待移除 2/)
-
-  // Old behaviour, and the one this panel is modelled on: clearing means
-  // "deselect everything", so the enabled rows become pending removals — except
-  // one, because a route that resolves no models is refused by the host.
-  panel.click('清空', 0)
-  assert.match(panel.text(), /待移除 1/)
-  assert.match(panel.text(), /至少保留一个模型/)
-  assert.equal(panel.checkbox('m-one').props.checked, true)
-  assert.equal(panel.checkbox('m-two').props.checked, false)
+  assert.match(panel.text(), /m-one/)
+  assert.equal(findAll(panel.tree, (node) => node.type === 'label' && textOf(node).includes('m-one')).length, 0)
+  assert.equal(panel.buttons('清空').length, 0)
+  assert.equal(panel.buttons('恢复适配器默认目录').length, 0)
 })
 
-test('clearing a card also drops pending additions', async () => {
+test('discarding an upstream draft leaves configured models alone', async () => {
   const panel = await mount({ view: view(), props: { expandedProvider: 'alpha' } })
   panel.toggle('m-three')
-  assert.match(panel.text(), /待加入 1/)
-  panel.click('清空', 0)
-  assert.doesNotMatch(panel.text(), /待加入/)
+  assert.match(panel.text(), /待加入 DSH 1 个/)
+  panel.click('放弃选择')
+  assert.doesNotMatch(panel.text(), /待加入 DSH 1 个/)
+  assert.match(panel.text(), /m-one/)
+  assert.equal(panel.calls.length, 0)
 })
 
-test('selecting an addition and a removal in the same card survives the render', async () => {
-  const panel = await mount({ view: view(), props: { expandedProvider: 'alpha' } })
-  panel.toggle('m-one')
-  panel.toggle('m-three')
-  assert.match(panel.text(), /待移除 1/)
-  assert.match(panel.text(), /待加入 1/)
-  // The save bar is the one place that both numbers have to agree with the rows.
-  assert.match(panel.text(), /待保存：加入 1 个 · 移除 1 个/)
-})
-
-test('a route with modelOverrides cannot be edited at all', async () => {
-  const panel = await mount({ view: view(), props: { expandedProvider: 'locked' } })
-  assert.equal(panel.checkbox('l-one').props.disabled, true)
-})
-
-test('a route whose check failed can still drop models', async () => {
+test('a failed check keeps stale candidates visible and disables selecting them', async () => {
   const payload = view()
-  payload.providers[0].check = { at: Date.now(), status: 'error', protocol: 'openai-completions', error: 'boom', added: [], gone: [] }
+  payload.providers[0].check = { ...payload.providers[0].check, status: 'error', error: 'boom', lastSuccessAt: Date.now() }
   const panel = await mount({ view: payload, props: { expandedProvider: 'alpha' } })
-  assert.equal(panel.checkbox('m-one').props.disabled, false)
-  panel.toggle('m-one')
-  assert.match(panel.text(), /待移除 1/)
+  assert.match(panel.text(), /已保留/)
+  assert.equal(panel.checkbox('m-three').props.disabled, true)
 })
 
 test('every button and switch survives a click without throwing', async () => {
@@ -284,16 +258,10 @@ test('every button and switch survives a click without throwing', async () => {
   assert.ok(panel.text().length > 0)
 })
 
-test('a destructive button asks twice before it writes anything', async () => {
-  const panel = await mount({ view: view(), props: { expandedProvider: 'alpha' } })
-  assert.equal(panel.buttons('恢复适配器默认目录').length, 1)
-
-  panel.click('恢复适配器默认目录')
-  assert.equal(panel.calls.filter((entry) => String(entry.url).includes('/restore')).length, 0, 'the first click must only ask')
-  assert.equal(panel.buttons('再点一次确认').length, 1)
-
-  panel.click('再点一次确认')
-  assert.equal(panel.calls.filter((entry) => String(entry.url).includes('/restore')).length, 1)
+test('possible legacy routes have no delete action', async () => {
+  const panel = await mount({ view: view({ legacy: [{ provider: 'alpha-chat' }] }) })
+  assert.match(panel.text(), /待核对的旧版路由/)
+  assert.equal(panel.buttons('删除这些合成供应商').length, 0)
 })
 
 test('a save that fails halfway keeps only what is still pending', async () => {
@@ -323,6 +291,7 @@ test('a save that fails halfway keeps only what is still pending', async () => {
     fetch: async (url, init) => {
       if (String(url).endsWith('/apply')) {
         const body = JSON.parse(init.body)
+        assert.equal(body.showInPicker, false)
         if (body.provider === 'alpha') throw new Error('boom')
         return json({ ok: true, written: ['b-two'] })
       }
@@ -337,15 +306,17 @@ test('a save that fails halfway keeps only what is still pending', async () => {
   header.props.onClick()
   panel.rerender()
   panel.toggle('b-two')
-  assert.match(panel.text(), /待保存：加入 2 个/)
+  assert.match(panel.text(), /待加入 DSH 2 个/)
 
-  panel.click('保存全部变更', 0)
+  panel.click('确认加入')
+  assert.equal(panel.checkbox('同时在对话下拉框显示').props.checked, false)
+  panel.click('加入 2 个模型')
   // Several awaits deep (each call settles one host round trip), so give the
   // microtask queue more than one turn before reading the panel.
   await new Promise((resolve) => setTimeout(resolve, 50))
   panel.rerender()
 
   // beta landed and left the draft; alpha did not, and is still queued.
-  assert.match(panel.text(), /待保存：加入 1 个/)
+  assert.match(panel.text(), /待加入 DSH 1 个/)
   assert.match(panel.text(), /alpha/)
 })
