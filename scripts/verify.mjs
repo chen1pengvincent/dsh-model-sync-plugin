@@ -134,7 +134,7 @@ async function main() {
           notes: [],
         })
       } else {
-        verdict = merge(verdict, inspectView(reply.json))
+        verdict = merge(verdict, inspectView(reply.json?.view))
       }
     } catch (error) {
       verdict = merge(verdict, {

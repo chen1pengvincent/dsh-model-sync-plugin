@@ -1,3 +1,4 @@
+import { createServer } from 'node:http'
 /**
  * The terminal half of the self-check, run the way the user runs it.
  *
@@ -59,9 +60,9 @@ async function home(options = {}) {
 }
 
 /** @param {string} dir @param {object} [extra] */
-async function verify(dir, extra = {}) {
+async function verify(dir, extra = {}, args = []) {
   try {
-    const { stdout, stderr } = await run(process.execPath, [join(ROOT, 'scripts', 'verify.mjs'), '--profile', 'desktop'], {
+    const { stdout, stderr } = await run(process.execPath, [join(ROOT, 'scripts', 'verify.mjs'), '--profile', 'desktop', ...args], {
       env: { ...process.env, DSH_HOME: dir, ...extra },
     })
     return { code: 0, out: `${stdout}${stderr}` }
@@ -78,6 +79,27 @@ test('an installed profile passes, and the verdict names the generation it found
     assert.ok(result.out.includes('✅'), result.out)
     assert.ok(result.out.includes(GENERATION), 'the verdict has to say which generation is installed')
   } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('live verification reads the model list inside the panel API envelope', async () => {
+  const dir = await home()
+  const server = createServer((_request, response) => {
+    response.setHeader('content-type', 'application/json')
+    response.end(JSON.stringify({
+      ok: true,
+      view: { providers: [{ provider: 'example', eagerCount: 1 }], schedule: { enabled: false } },
+    }))
+  })
+  try {
+    await new Promise((done) => server.listen(0, '127.0.0.1', done))
+    const url = `http://127.0.0.1:${server.address().port}`
+    const result = await verify(dir, {}, ['--url', url])
+    assert.equal(result.code, 0, result.out)
+    assert.match(result.out, /1 个已配置供应商/)
+  } finally {
+    await new Promise((done) => server.close(done))
     await rm(dir, { recursive: true, force: true })
   }
 })
