@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-sync",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "同步已配置供应商的模型清单：定期问上游要目录，由你在设置面板里逐项确认后再写回 providers.<route>.models —— 永不新增 provider 键。Keep the models a configured provider serves in step with what it advertises upstream, without ever adding a provider.",
   "type": "module",
