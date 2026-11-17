@@ -1,8 +1,11 @@
-# dsh-model-sync bundle patch: inserts the host row into the profile's
-# plugin roster. The browser half rides the package's `dsh.client` manifest.
-# Install with `dsh plugin --profile <name> add <path-or-git-url>`; the bundle
-# patch is applied automatically, so do NOT insert this row again in the
-# profile patch (duplicate ids crash the loader).
+# dsh-model-sync bundle patch: puts this plugin's host half on the profile's
+# roster. The browser half rides the package's `dsh.client` manifest.
+#
+# Install with `dsh plugin --profile <name> add link:<abs-path>`; the bundle
+# patch is applied by the installer, so do NOT insert this row again in the
+# profile's own patch file. A duplicate entry id does not error — the second
+# definition silently wins, which is worse: the plugin loads from an id nobody
+# can see in the profile's own file.
 - insert:
     - id: dsh-model-sync
       name: 'dsh-model-sync'

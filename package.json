@@ -1,41 +1,49 @@
 {
   "name": "dsh-model-sync",
-  "version": "0.12.5",
+  "version": "2.0.0",
   "private": true,
-  "description": "动态发现 DSH 官方模型供应商，查看目录未读新增/移除，显式勾选保存；保护手工配置并保留 OpenCode 协议分流与会话标头支持。Discover configured official providers, track unread catalog changes, and explicitly select models for DeepSeek Harness.",
+  "description": "同步已配置供应商的模型清单：定期问上游要目录，由你在设置面板里逐项确认后再写回 providers.<route>.models —— 永不新增 provider 键。Keep the models a configured provider serves in step with what it advertises upstream, without ever adding a provider.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
-    "./icon": "./assets/icon.svg",
-    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
-    "assets",
-    "locale",
     "cordis.patch.yml",
     "README.md",
-    "docs"
+    "docs",
+    "scripts"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "live": "node scripts/live-discovery.mjs",
+    "boot-graph": "node scripts/boot-graph.mjs",
+    "verify": "node scripts/verify.mjs",
+    "rehearse": "node scripts/rehearse.mjs"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/chen1pengvincent/dsh-model-sync-plugin.git"
+  },
+  "homepage": "https://github.com/chen1pengvincent/dsh-model-sync-plugin#readme",
+  "bugs": {
+    "url": "https://github.com/chen1pengvincent/dsh-model-sync-plugin/issues"
   },
   "keywords": [
     "dsh",
     "deepseek-harness",
     "plugin",
     "model-sync",
+    "model-catalog",
     "openai",
     "anthropic",
+    "gemini",
     "deepseek",
-    "opencode"
+    "opencode",
+    "ollama"
   ],
   "license": "MIT",
   "engines": {
@@ -43,55 +51,10 @@
   },
   "dsh": {
     "client": {
-      "inject": [
-        "@deepseek-ai/dsh-client-runtime"
-      ],
       "platform": "web"
     },
     "bundle": {
       "patch": "./cordis.patch.yml"
-    }
-  },
-  "dshWorkshop": {
-    "schema": "omdsh-workshop-package/v1",
-    "type": "plugin",
-    "integration": {
-      "protocol": "harness-profile",
-      "artifact": "cordis.patch.yml"
-    },
-    "install": {
-      "mode": "transactional",
-      "adapter": "profile-bundle",
-      "failurePolicy": "generation-rollback",
-      "touchesCurrentBeforeActivation": false
-    },
-    "lifecycle": {
-      "activation": "restart-profile",
-      "dispose": "supported"
-    },
-    "permissions": [
-      "settings:read",
-      "settings:write",
-      "credentials:read",
-      "network:outbound",
-      "native-code:none"
-    ],
-    "compatibility": {
-      "dshVersions": [
-        "0.2.2-rc.1"
-      ]
-    },
-    "capability": {
-      "id": "model-sync",
-      "kind": "command",
-      "invocation": "/model-sync check",
-      "expected": "returns read-only per-instance official catalog status, unread added/removed/change counts, and separately available selections; never writes model settings"
-    },
-    "evidence": {
-      "install": "docs/ecosystem.md",
-      "failureIsolation": "docs/ecosystem.md",
-      "hotReload": "docs/ecosystem.md",
-      "remove": "docs/ecosystem.md"
     }
   }
 }
