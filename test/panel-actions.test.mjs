@@ -217,14 +217,14 @@ function view(overrides = {}) {
   }
 }
 
-test('configured models are checked, and staging removal shows session usage without writing', async () => {
-  const panel = await mount({ view: view({ usage: [[JSON.stringify(['alpha', 'm-one']), 1]] }), props: { expandedProvider: 'alpha' } })
+test('unchecking a configured model stages hiding, and checking it again clears the draft', async () => {
+  const panel = await mount({ view: view(), props: { expandedProvider: 'alpha' } })
   assert.equal(panel.checkbox('m-one').props.checked, true)
   panel.toggle('m-one')
-  assert.match(panel.text(), /1 个会话正在使用，保存后需更换模型.*待移除/)
+  assert.match(panel.text(), /待隐藏/)
   assert.equal(panel.checkbox('m-one').props.checked, false)
   panel.toggle('m-one')
-  assert.doesNotMatch(panel.text(), /保存后需更换模型/)
+  assert.doesNotMatch(panel.text(), /待隐藏/)
   assert.equal(panel.checkbox('m-one').props.checked, true)
   assert.equal(panel.calls.length, 0)
 })
@@ -232,9 +232,9 @@ test('configured models are checked, and staging removal shows session usage wit
 test('discarding an upstream draft leaves configured models alone', async () => {
   const panel = await mount({ view: view(), props: { expandedProvider: 'alpha' } })
   panel.toggle('m-three')
-  assert.match(panel.text(), /待添加 1 个/)
+  assert.match(panel.text(), /待显示/)
   panel.click('放弃更改')
-  assert.doesNotMatch(panel.text(), /待添加 1 个/)
+  assert.doesNotMatch(panel.text(), /待显示/)
   assert.match(panel.text(), /m-one/)
   assert.equal(panel.calls.length, 0)
 })
@@ -297,7 +297,9 @@ test('a save that fails halfway keeps only what is still pending', async () => {
     fetch: async (url, init) => {
       if (String(url).endsWith('/apply')) {
         const body = JSON.parse(init.body)
-        assert.equal(body.showInPicker, false)
+        assert.equal(body.showInPicker, true)
+        assert.deepEqual(body.removeIds, [])
+        if (body.provider === 'alpha') assert.deepEqual(body.pickerChanges, [{ id: 'm-one', visible: false }])
         if (body.provider === 'alpha') throw new Error('boom')
         return json({ ok: true, written: ['b-two'], removed: [] })
       }
@@ -306,16 +308,16 @@ test('a save that fails halfway keeps only what is still pending', async () => {
   })
 
   panel.toggle('m-three')
+  panel.toggle('m-one')
   // Expand the other card the way a user would, by clicking its header.
   const header = findAll(panel.tree, (node) => node.type === 'button' && textOf(node).includes('beta'))[0]
   assert.ok(header, 'no header button for beta')
   header.props.onClick()
   panel.rerender()
   panel.toggle('b-two')
-  assert.match(panel.text(), /待添加 2 个/)
+  assert.match(panel.text(), /3 项选择待保存/)
 
-  assert.equal(panel.checkbox('同时在对话显示').props.checked, false)
-  panel.click('保存模型变更')
+  panel.click('保存模型选择')
   // Several awaits deep (each call settles one host round trip), so give the
   // microtask queue more than one turn before reading the panel.
   await new Promise((resolve) => setTimeout(resolve, 50))
@@ -324,7 +326,7 @@ test('a save that fails halfway keeps only what is still pending', async () => {
   // beta landed and left the draft; alpha did not, and is still queued.
   assert.match(panel.text(), /alpha/)
   const beforeRetry = panel.calls.length
-  panel.click('保存模型变更')
+  panel.click('保存模型选择')
   await new Promise((resolve) => setTimeout(resolve, 0))
   const retried = panel.calls.slice(beforeRetry).filter(({ url }) => url.endsWith('/apply'))
   assert.deepEqual(retried.map(({ body }) => JSON.parse(body).provider), ['alpha'])

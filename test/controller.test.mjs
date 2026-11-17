@@ -173,6 +173,25 @@ test('removal-only does not need a check and preserves unchanged model metadata'
   }
 })
 
+test('one picker save registers a new model and hides an existing model without deleting it', async () => {
+  const keep = { id: 'gemini-4-argon', name: 'Argon', contextWindow: 12345 }
+  const newId = 'gemini-4-neon'
+  const { controller, document, dir, writes } = await controllerFor({ googleModels: [keep] })
+  try {
+    controller.store.data.checks = { google: { status: 'ok', added: [{ id: newId }] } }
+    controller.store.data.hiddenModels = [['google', newId], ['other-provider', keep.id]]
+    const result = await controller.apply({
+      provider: 'google', ids: [newId], removeIds: [], showInPicker: true,
+      pickerChanges: [{ id: keep.id, visible: false }],
+    })
+    assert.equal(writes.length, 1)
+    assert.deepEqual(document[PIAI].providers.google.models, [keep, { id: newId }])
+    assert.deepEqual(result.hidden, [['other-provider', keep.id], ['google', keep.id]])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 /** A controller over a temp state directory. */
 async function controllerFor(options = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'model-sync-test-'))

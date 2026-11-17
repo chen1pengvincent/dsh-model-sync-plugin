@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import http from 'node:http'
 import test from 'node:test'
 
-import { authHeaders, listAll, listingUrl, readGeminiListing, readListing } from '../lib/discovery.js'
+import { authHeaders, listAll, listModels, listingUrl, readGeminiListing, readListing } from '../lib/discovery.js'
 import { maskUrl } from '../lib/http.js'
 
 test('listingUrl appends the protocol path after the base, not after its query', () => {
@@ -136,6 +136,30 @@ test('listAll reports every protocol when none of them answer', async () => {
     }),
     /no protocol answered a model listing/,
   )
+})
+
+test('a model check follows the Anthropic and Gemini cursors and keeps each model once', async () => {
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url, 'http://localhost')
+    const gemini = url.pathname.startsWith('/v1beta')
+    const cursor = url.searchParams.get(gemini ? 'pageToken' : 'after_id')
+    const page = cursor === 'second-page' ? ['first', 'second'] : ['first']
+    const payload = gemini
+      ? { models: page.map((name) => ({ name: `models/${name}` })), ...(cursor === null ? { nextPageToken: 'second-page' } : {}) }
+      : { data: page.map((id) => ({ id })), has_more: cursor === null, last_id: 'second-page' }
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify(payload))
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  try {
+    for (const api of ['anthropic-messages', 'google-generative-ai']) {
+      const result = await listModels({ baseURL: `http://127.0.0.1:${server.address().port}`, candidates: [api], timeoutMs: 4000 })
+      assert.deepEqual(result.models.map(({ id }) => id), ['first', 'second'])
+      assert.equal(result.complete, true)
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
 })
 
 test('an empty but successful listing does not win the ladder', async () => {

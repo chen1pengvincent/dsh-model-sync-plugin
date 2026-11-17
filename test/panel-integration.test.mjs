@@ -166,7 +166,7 @@ test('the real view payload renders in the real panel', async () => {
   // A first run must not accuse itself: no state problem row, and the row that
   // is there must say how many models it would keep.
   assert.ok(!populated.includes('could not be moved aside'), 'a fresh install has no state file to reject')
-  assert.ok(populated.includes('已添加 1 个'), 'the row states the effective model count')
+  assert.ok(populated.includes('已显示 1 / 1 个'), 'the row states the effective model count')
   for (const expected of ['Google', '网络出口详情', 'opencode-go-chat']) {
     assert.ok(populated.includes(expected), `the panel must show "${expected}" from the real payload`)
   }

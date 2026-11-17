@@ -73,6 +73,7 @@ async function loadClient(options = {}) {
   const registered = []
   const context = {
     window: { __ModuleLoader__: { load: (entry) => registered.push(entry) } },
+    __dshModelSyncSelectorVersion: 1,
     console,
     fetch: options.fetch ?? (async () => { throw new Error('the panel must not fetch during render') }),
     setTimeout,
@@ -198,7 +199,7 @@ test('the panel renders providers, legacy keys and the bili egress block', async
   // The template is the one the panel had before this rewrite: a summary line, a
   // transport switch, one collapsed card per provider, and a save bar. Nothing
   // here should need a click to read.
-  for (const expected of ['模型管理', '上游目录', '对话显示', 'opencode-go', '已添加 1 个', '网络出口详情', 'opencode-chat']) {
+  for (const expected of ['模型管理', '勾选要在对话下拉框中显示的模型', 'opencode-go', '已显示 1 / 1 个', '网络出口详情', 'opencode-chat']) {
     assert.ok(populated.includes(expected), `the populated panel must render "${expected}"`)
   }
 
@@ -331,7 +332,7 @@ test('the hour field posts the typed hour and refuses everything else', async ()
   assert.deepEqual(posts[0].body, { schedule: { enabled: true, hour: 7 } })
 })
 
-test('a card that failed to check still lets existing models be removed', async () => {
+test('a card that failed to check still lets existing models be hidden', async () => {
   // Unchecking an enabled model is a write about what is already configured; it
   // does not need the upstream listing. Locking the whole card when the check
   // failed is what left the user unable to change anything on four cards.
@@ -369,9 +370,9 @@ test('a card that failed to check still lets existing models be removed', async 
     if (node.type === 'input' && node.props?.type === 'checkbox') boxes.push(node.props)
   })
   assert.ok(boxes.length >= 2, 'the expanded card must render at least two checkboxes')
-  const kept = boxes.find((props) => props.checked === true)
-  const added = boxes.find((props) => props.checked === false)
-  assert.equal(kept?.disabled, false, 'an enabled model must stay removable even when the check failed')
+  const kept = boxes.find((props) => props['aria-label']?.includes('kept-1'))
+  const added = boxes.find((props) => props['aria-label']?.includes('new-2'))
+  assert.equal(kept?.disabled, false, 'a visible model must stay switchable even when the check failed')
   assert.equal(added?.disabled, true, 'adding still needs a successful check: there is nothing to add without one')
 })
 
@@ -402,5 +403,5 @@ test('a route nothing knows how to reach is described in words, not painted red'
   const text = textOf(Panel({ view: payload, expandedProvider: 'mystery' }))
   assert.ok(text.includes('无法检查'), 'the neutral status must be shown')
   assert.ok(text.includes('维护与诊断'), 'details remain accessible')
-  assert.ok(text.includes('已添加 2 个'), 'the configured models still render')
+  assert.ok(text.includes('已显示 2 / 2 个'), 'the configured models still render')
 })
