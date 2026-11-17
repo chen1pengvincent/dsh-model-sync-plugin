@@ -118,6 +118,8 @@ function harness(options = {}) {
       if (name === 'llm') return llm
       if (name === 'credentials') return credentials
       if (name === 'profileContext') return { dir: options.profileDir }
+      if (name === 'sessions') return options.sessions
+      if (name === 'sessionProjections') return options.sessionProjections
       return undefined
     },
     logger: { warn() {}, info() {}, error() {} },
@@ -125,6 +127,51 @@ function harness(options = {}) {
 
   return { ctx, document, writes, settings }
 }
+
+test('membership swaps the only configured model in one write and offers it again when listed upstream', async () => {
+  const current = 'gemini-4-argon'
+  const replacement = 'gemini-4-neon'
+  const selected = [{ provider: 'google', model: current }, { provider: 'another-route', model: current }]
+  const { controller, document, dir, writes } = await controllerFor({
+    googleModels: [{ id: current, name: 'Argon' }],
+    sessions: { list: () => selected },
+    sessionProjections: { snapshot: (next) => ({ values: { modelSelection: { next } } }) },
+  })
+  try {
+    const candidates = [{ id: replacement }]
+    controller.store.data.checks = { google: { status: 'ok', added: candidates, catalog: [{ id: current, name: 'Argon' }, ...candidates] } }
+    const swap = { provider: 'google', ids: [replacement], removeIds: [current], showInPicker: false }
+    await assert.rejects(() => controller.apply({ ...swap, ids: [] }), /至少保留一个模型/)
+    await assert.rejects(() => controller.apply(swap), /有新的会话/)
+    await assert.rejects(() => controller.apply({ ...swap, ids: ['unlisted'] }), /候选清单已变化/)
+    assert.equal(writes.length, 0)
+
+    const result = await controller.apply({ ...swap, seenUsage: [[current, 1]] })
+    assert.deepEqual(result.written, [replacement])
+    assert.deepEqual(result.removed, [current])
+    assert.deepEqual(result.hidden, [['google', replacement]])
+    assert.equal(writes.length, 1)
+    assert.deepEqual(writes[0].ops[0].path, ['providers', 'google', 'models'])
+    assert.deepEqual(document[PIAI].providers.google.models.map(({ id }) => id), [replacement])
+    assert.deepEqual(controller.store.data.checks.google.added, [{ id: current, name: 'Argon' }])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('removal-only does not need a check and preserves unchanged model metadata', async () => {
+  const keep = { id: 'gemini-4-argon', name: 'Argon', contextWindow: 12345 }
+  const { controller, document, dir, writes } = await controllerFor({
+    googleModels: [{ id: 'gemini-4-neon' }, keep],
+  })
+  try {
+    await controller.apply({ provider: 'google', ids: [], removeIds: ['gemini-4-neon'] })
+    assert.equal(writes.length, 1)
+    assert.deepEqual(document[PIAI].providers.google.models, [keep])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
 
 /** A controller over a temp state directory. */
 async function controllerFor(options = {}) {

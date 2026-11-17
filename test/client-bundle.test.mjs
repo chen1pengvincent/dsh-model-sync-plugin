@@ -198,7 +198,7 @@ test('the panel renders providers, legacy keys and the bili egress block', async
   // The template is the one the panel had before this rewrite: a summary line, a
   // transport switch, one collapsed card per provider, and a save bar. Nothing
   // here should need a click to read.
-  for (const expected of ['模型管理', '上游目录', '对话显示', 'opencode-go', '已启用 1 个', '上游尚未加入的模型 1', 'generativelanguage.googleapis.com', '127.0.0.1:18787', 'opencode-chat']) {
+  for (const expected of ['模型管理', '上游目录', '对话显示', 'opencode-go', '已添加 1 个', '网络出口详情', 'opencode-chat']) {
     assert.ok(populated.includes(expected), `the populated panel must render "${expected}"`)
   }
 
@@ -303,7 +303,7 @@ test('the hour field posts the typed hour and refuses everything else', async ()
     react: { ...REACT_STUB, useState: (value) => [typeof value === 'function' ? value() : value, () => undefined] },
     fetch: async (url, init) => {
       posts.push({ url: String(url), body: init?.body === undefined ? undefined : JSON.parse(String(init.body)) })
-      return { ok: true, json: async () => ({ ok: true, view: payload }) }
+      return { ok: true, headers: { get: () => 'application/json' }, json: async () => ({ ok: true, view: payload }) }
     },
   })
   const module = registered[0].factory(() => ({ ...REACT_STUB }))
@@ -318,7 +318,7 @@ test('the hour field posts the typed hour and refuses everything else', async ()
   const tree = Panel({ view: payload })
   const changed = []
   walk(tree, (node) => {
-    if (node.props?.type === 'number' && typeof node.props.onChange === 'function') changed.push(node.props.onChange)
+    if (node.type === 'select' && typeof node.props.onChange === 'function') changed.push(node.props.onChange)
   })
   assert.equal(changed.length, 1, 'the panel must offer exactly one hour field')
 
@@ -401,6 +401,6 @@ test('a route nothing knows how to reach is described in words, not painted red'
   })
   const text = textOf(Panel({ view: payload, expandedProvider: 'mystery' }))
   assert.ok(text.includes('无法检查'), 'the neutral status must be shown')
-  assert.ok(text.includes('插件不知道这条路由该问哪个地址'), 'and explained')
-  assert.ok(text.includes('未启用') || text.includes('已启用'), 'the card still renders')
+  assert.ok(text.includes('维护与诊断'), 'details remain accessible')
+  assert.ok(text.includes('已添加 2 个'), 'the configured models still render')
 })

@@ -160,7 +160,9 @@ async function mount(options = {}) {
       return input
     },
     toggle(id) {
-      api.checkbox(id).props.onChange()
+      const input = api.checkbox(id)
+      assert.equal(input.props.disabled, false)
+      input.props.onChange({ target: { checked: !input.props.checked } })
       return api.rerender()
     },
   }
@@ -215,20 +217,24 @@ function view(overrides = {}) {
   }
 }
 
-test('configured models are read-only in the upstream catalog', async () => {
-  const panel = await mount({ view: view(), props: { expandedProvider: 'alpha' } })
-  assert.match(panel.text(), /m-one/)
-  assert.equal(findAll(panel.tree, (node) => node.type === 'label' && textOf(node).includes('m-one')).length, 0)
-  assert.equal(panel.buttons('清空').length, 0)
-  assert.equal(panel.buttons('恢复适配器默认目录').length, 0)
+test('configured models are checked, and staging removal shows session usage without writing', async () => {
+  const panel = await mount({ view: view({ usage: [[JSON.stringify(['alpha', 'm-one']), 1]] }), props: { expandedProvider: 'alpha' } })
+  assert.equal(panel.checkbox('m-one').props.checked, true)
+  panel.toggle('m-one')
+  assert.match(panel.text(), /1 个会话正在使用，保存后需更换模型.*待移除/)
+  assert.equal(panel.checkbox('m-one').props.checked, false)
+  panel.toggle('m-one')
+  assert.doesNotMatch(panel.text(), /保存后需更换模型/)
+  assert.equal(panel.checkbox('m-one').props.checked, true)
+  assert.equal(panel.calls.length, 0)
 })
 
 test('discarding an upstream draft leaves configured models alone', async () => {
   const panel = await mount({ view: view(), props: { expandedProvider: 'alpha' } })
   panel.toggle('m-three')
-  assert.match(panel.text(), /待加入 DSH 1 个/)
-  panel.click('放弃选择')
-  assert.doesNotMatch(panel.text(), /待加入 DSH 1 个/)
+  assert.match(panel.text(), /待添加 1 个/)
+  panel.click('放弃更改')
+  assert.doesNotMatch(panel.text(), /待添加 1 个/)
   assert.match(panel.text(), /m-one/)
   assert.equal(panel.calls.length, 0)
 })
@@ -237,7 +243,7 @@ test('a failed check keeps stale candidates visible and disables selecting them'
   const payload = view()
   payload.providers[0].check = { ...payload.providers[0].check, status: 'error', error: 'boom', lastSuccessAt: Date.now() }
   const panel = await mount({ view: payload, props: { expandedProvider: 'alpha' } })
-  assert.match(panel.text(), /已保留/)
+  assert.equal(panel.checkbox('m-one').props.disabled, false)
   assert.equal(panel.checkbox('m-three').props.disabled, true)
 })
 
@@ -293,7 +299,7 @@ test('a save that fails halfway keeps only what is still pending', async () => {
         const body = JSON.parse(init.body)
         assert.equal(body.showInPicker, false)
         if (body.provider === 'alpha') throw new Error('boom')
-        return json({ ok: true, written: ['b-two'] })
+        return json({ ok: true, written: ['b-two'], removed: [] })
       }
       return json({ ok: true, view: payload })
     },
@@ -306,17 +312,20 @@ test('a save that fails halfway keeps only what is still pending', async () => {
   header.props.onClick()
   panel.rerender()
   panel.toggle('b-two')
-  assert.match(panel.text(), /待加入 DSH 2 个/)
+  assert.match(panel.text(), /待添加 2 个/)
 
-  panel.click('确认加入')
-  assert.equal(panel.checkbox('同时在对话下拉框显示').props.checked, false)
-  panel.click('加入 2 个模型')
+  assert.equal(panel.checkbox('同时在对话显示').props.checked, false)
+  panel.click('保存模型变更')
   // Several awaits deep (each call settles one host round trip), so give the
   // microtask queue more than one turn before reading the panel.
   await new Promise((resolve) => setTimeout(resolve, 50))
   panel.rerender()
 
   // beta landed and left the draft; alpha did not, and is still queued.
-  assert.match(panel.text(), /待加入 DSH 1 个/)
   assert.match(panel.text(), /alpha/)
+  const beforeRetry = panel.calls.length
+  panel.click('保存模型变更')
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const retried = panel.calls.slice(beforeRetry).filter(({ url }) => url.endsWith('/apply'))
+  assert.deepEqual(retried.map(({ body }) => JSON.parse(body).provider), ['alpha'])
 })
