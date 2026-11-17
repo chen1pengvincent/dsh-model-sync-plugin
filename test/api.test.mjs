@@ -41,10 +41,10 @@ function mount(controller) {
   assert.equal(registered.kind, 'prefix')
   assert.equal(registered.path, '/model-sync')
 
-  return async function request(method, url, body) {
+  return async function request(method, url, body, headers) {
     const request_ = Object.assign(
       Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))]),
-      { method, url },
+      { method, url, headers },
     )
     /** @type {any} */
     const response = {
@@ -86,6 +86,31 @@ test('each documented verb reaches its controller method with the body', async (
     assert.equal(reply.json.ok, true, `${verb} should answer ok`)
   }
   assert.deepEqual(controller.calls.map(([name]) => name), cases.map(([verb]) => verb))
+})
+
+test('browser cross-site writes are refused before the controller sees them', async () => {
+  const controller = stubController()
+  const request = mount(controller)
+
+  const crossOrigin = await request('POST', '/model-sync/api/check', { provider: 'google' }, {
+    origin: 'https://evil.example',
+    'content-type': 'application/json',
+  })
+  assert.equal(crossOrigin.status, 403)
+  assert.equal(crossOrigin.json.ok, false)
+
+  const crossSite = await request('POST', '/model-sync/api/check', { provider: 'google' }, {
+    'sec-fetch-site': 'cross-site',
+    'content-type': 'application/json',
+  })
+  assert.equal(crossSite.status, 403)
+
+  const textPlain = await request('POST', '/model-sync/api/check', { provider: 'google' }, {
+    origin: 'http://127.0.0.1:53186',
+    'content-type': 'text/plain',
+  })
+  assert.equal(textPlain.status, 415)
+  assert.equal(controller.calls.length, 0, 'no refused request may reach the controller')
 })
 
 test('an unknown verb answers 404 and calls nothing', async () => {
