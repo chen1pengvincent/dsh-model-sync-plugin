@@ -38,7 +38,7 @@ function harness(options = {}) {
         ...(options.extraProviders ?? {}),
       },
     },
-    [DEEPSEEK]: { apiKeyEnv: 'DEEPSEEK_API_KEY' },
+    [DEEPSEEK]: { apiKeyEnv: 'DEEPSEEK_API_KEY', ...options.deepseek },
   }
   /** @type {Record<string, number>} */
   const revisions = { [PIAI]: 1, [DEEPSEEK]: 1 }
@@ -101,7 +101,7 @@ function harness(options = {}) {
         const stated = document[PIAI].providers.google.models
         return Array.isArray(stated) ? stated.map((model) => ({ id: model.id ?? model })) : [{ id: 'gemini-4-argon' }]
       }
-      if (provider === 'deepseek-official') return [{ id: 'deepseek-chat' }]
+      if (provider === 'deepseek-official') return document[DEEPSEEK].models ?? [{ id: 'deepseek-chat' }]
       return [{ id: `${provider}-model` }]
     },
   }
@@ -558,6 +558,33 @@ test('materializing deepseek-official restores the capabilities a bare id would 
   }
 
   await rm(controller.store.dir, { recursive: true, force: true })
+})
+
+test('DeepSeek official can discover and re-add a removed model without altering the retained entry', async () => {
+  const flash = { id: 'deepseek-flash', name: 'Local Flash', toolUpdate: 'addition-only' }
+  const pro = { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_048_576, maxTokens: 393_216, inputModalities: ['text'] }
+  const models = [flash, pro, { id: 'responses-only', blocked: '未声明 Messages 能力' }]
+  const { controller, document, dir } = await controllerFor({ deepseek: { models: [flash], maxTokens: 120_000 } })
+  controller.list = async ({ baseURL, candidates }) => {
+    assert.equal(baseURL, 'https://api.deepseek.com')
+    assert.deepEqual(candidates, ['deepseek-models'])
+    return { api: candidates[0], via: 'direct', models }
+  }
+  try {
+    const { results: [checked] } = await controller.check({ provider: 'deepseek-official' })
+    assert.equal(checked.status, 'ok')
+    assert.deepEqual(checked.added, models.slice(1))
+    const apply = (id) => controller.apply({ provider: 'deepseek-official', ids: [id], removeIds: [], showInPicker: false })
+    await assert.rejects(() => apply('responses-only'), /未声明 Messages 能力/)
+    await apply(pro.id)
+    assert.deepEqual(document[DEEPSEEK].models, [flash, { ...pro, maxTokens: 120_000 }])
+    await controller.apply({ provider: 'deepseek-official', ids: [], removeIds: [pro.id] })
+    assert.deepEqual(document[DEEPSEEK].models, [flash])
+    const route = (await controller.view()).providers.find(({ provider }) => provider === 'deepseek-official')
+    assert.ok(route.check.added.some(({ id, blocked }) => id === pro.id && blocked === undefined))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })
 
 test('a write that leaves the route with no models at all is rolled back', async () => {
