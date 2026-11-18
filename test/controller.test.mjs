@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { Controller } from '../lib/controller.js'
+import { indexModelsDev } from '../lib/models-dev.js'
 import { additionOp, buildModelsWrite, removalOp, restoreOp } from '../lib/plan.js'
 import { foreignProviderKeys } from '../lib/targets.js'
 import { format } from '../lib/verify.js'
@@ -717,4 +718,411 @@ test('a route nothing knows how to reach is reported as unknown, not as broken',
   assert.deepEqual(Object.keys(document[PIAI].providers).sort(), ['google', 'mystery'])
 
   await rm(controller.store.dir, { recursive: true, force: true })
+})
+
+
+const DEV_PAYLOAD = {
+  google: {
+    id: 'google', name: 'Google',
+    models: {
+      'gemini-x': {
+        id: 'gemini-x', name: 'Gemini X', family: 'gemini',
+        reasoning: true,
+        reasoning_options: [{ type: 'effort', values: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] }],
+        modalities: { input: ['text', 'image'], output: ['text'] },
+        limit: { context: 1000, output: 100 },
+        canonical_model_id: 'google/gemini-x',
+      },
+    },
+  },
+}
+
+function devTarget(entries) {
+  return {
+    provider: 'google', displayName: 'Google', settingsNs: PIAI,
+    settingsPath: ['providers', 'google', 'models'], modelEntries: entries, revision: 1,
+    effectiveIds: entries.map((entry) => entry.id),
+  }
+}
+
+test('metadata fallback fills every blank field on an explicit model list and is visible in the tab', async () => {
+  const model = { id: 'gemini-x', name: 'Gemini X' }
+  const { controller, document, dir, writes } = await controllerFor({ googleModels: [model] })
+  try {
+    controller.modelsDevIndex = indexModelsDev(DEV_PAYLOAD)
+    const changed = await controller.autoFillMetadata(devTarget([model]))
+    assert.equal(changed, 1)
+    assert.equal(writes.length, 1)
+    assert.deepEqual(document[PIAI].providers.google.models[0], {
+      id: 'gemini-x', name: 'Gemini X', contextWindow: 1000, maxTokens: 100,
+      reasoningEfforts: { minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
+    })
+    const view = await controller.view()
+    assert.equal(view.metadata.pendingCount, 1)
+    const row = view.metadata.models[0]
+    assert.equal(row.id, 'gemini-x')
+    assert.equal(row.fields.contextWindow.value, 1000)
+    assert.equal(row.fields.contextWindow.source, 'models.dev')
+    assert.equal(row.fields.maxTokens.source, 'models.dev')
+    assert.equal(row.fields.reasoningEfforts.value.high, 'high')
+    assert.equal(row.status, 'pending')
+    assert.equal(row.missing, 0)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('official values overwrite provisional user values and remove the model from the tab', async () => {
+  const model = { id: 'gemini-x', contextWindow: 1 }
+  const { controller, document, dir } = await controllerFor({ googleModels: [model] })
+  try {
+    controller.modelsDevIndex = indexModelsDev(DEV_PAYLOAD)
+    controller.store.data.checks = {
+      google: { status: 'ok', catalog: [{ id: 'gemini-x', contextWindow: 1000, maxTokens: 100, reasoningEfforts: { low: 'low', high: 'high' } }] },
+    }
+    controller.metadataState().records.google = {
+      'gemini-x': {
+        provider: 'google', id: 'gemini-x', firstSeenAt: 1, pending: true,
+        fields: { contextWindow: { value: 1, source: 'user', confidence: 'high', at: 1 } },
+        log: [],
+      },
+    }
+    const changed = await controller.autoFillMetadata(devTarget([model]))
+    assert.equal(changed, 1)
+    assert.deepEqual(document[PIAI].providers.google.models[0], {
+      id: 'gemini-x', contextWindow: 1000, maxTokens: 100,
+      reasoningEfforts: { low: 'low', high: 'high' },
+    })
+    assert.equal(controller.metadataState().records.google['gemini-x'].pending, false)
+    const view = await controller.view()
+    assert.equal(view.metadata.pendingCount, 0)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('an official value that already matches promotes models.dev provenance without a write', async () => {
+  const model = {
+    id: 'gemini-x',
+    contextWindow: 1000,
+    maxTokens: 100,
+    reasoningEfforts: { low: 'low', high: 'high' },
+  }
+  const { controller, document, dir, writes } = await controllerFor({ googleModels: [model] })
+  try {
+    controller.modelsDevIndex = indexModelsDev(DEV_PAYLOAD)
+    controller.store.data.checks = {
+      google: { status: 'ok', catalog: [{ id: 'gemini-x', contextWindow: 1000, maxTokens: 100, reasoningEfforts: { low: 'low', high: 'high' } }] },
+    }
+    controller.metadataState().records.google = {
+      'gemini-x': {
+        provider: 'google', id: 'gemini-x', firstSeenAt: 1, pending: true,
+        fields: {
+          contextWindow: { value: 1000, source: 'models.dev', confidence: 'medium', at: 1 },
+          maxTokens: { value: 100, source: 'models.dev', confidence: 'medium', at: 1 },
+          reasoningEfforts: { value: { low: 'low', high: 'high' }, source: 'models.dev', confidence: 'medium', at: 1 },
+        },
+        log: [],
+      },
+    }
+    const changed = await controller.autoFillMetadata(devTarget([model]))
+    assert.equal(changed, 0)
+    assert.equal(writes.length, 0)
+    assert.deepEqual(document[PIAI].providers.google.models[0], model)
+    const record = controller.metadataState().records.google['gemini-x']
+    assert.equal(record.pending, false)
+    assert.equal(record.fields.contextWindow.source, 'official')
+    assert.equal(record.fields.maxTokens.source, 'official')
+    assert.equal(record.fields.reasoningEfforts.source, 'official')
+    const view = await controller.view()
+    assert.equal(view.metadata.pendingCount, 0)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('a settings conflict leaves the ledger untouched rather than claiming a write', async () => {
+  const model = { id: 'gemini-x' }
+  let bumped = false
+  const { controller, document, dir, writes } = await controllerFor({
+    googleModels: [model],
+    onMutate({ revisions }) {
+      if (!bumped) { bumped = true; revisions[PIAI] += 1 }
+    },
+  })
+  try {
+    controller.modelsDevIndex = indexModelsDev(DEV_PAYLOAD)
+    const changed = await controller.autoFillMetadata(devTarget([model]))
+    assert.equal(changed, 0)
+    assert.equal(writes.length, 1)
+    assert.deepEqual(document[PIAI].providers.google.models[0], { id: 'gemini-x' })
+    assert.equal(controller.store.data.metadata?.records?.google?.['gemini-x'], undefined)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('a route that inherits its catalog is never materialized by metadata fallback', async () => {
+  const { controller, dir, writes } = await controllerFor()
+  try {
+    controller.modelsDevIndex = indexModelsDev(DEV_PAYLOAD)
+    const changed = await controller.autoFillMetadata({
+      provider: 'google', settingsNs: PIAI, settingsPath: ['providers', 'google'],
+      modelEntries: undefined, revision: 1, effectiveIds: ['gemini-x'],
+    })
+    assert.equal(changed, 0)
+    assert.deepEqual(writes, [])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('editing and reverting provisional fields writes the setting and keeps user edits', async () => {
+  const model = { id: 'gemini-x' }
+  const { controller, document, dir } = await controllerFor({ googleModels: [model] })
+  try {
+    controller.modelsDevIndex = indexModelsDev(DEV_PAYLOAD)
+    await controller.autoFillMetadata(devTarget([model]))
+    await controller.updateMetadata({ provider: 'google', id: 'gemini-x', field: 'contextWindow', value: 123 })
+    assert.equal(document[PIAI].providers.google.models[0].contextWindow, 123)
+    assert.equal(controller.metadataState().records.google['gemini-x'].fields.contextWindow.source, 'user')
+    await controller.revertMetadata({ provider: 'google', id: 'gemini-x' })
+    const entry = document[PIAI].providers.google.models[0]
+    assert.equal(entry.contextWindow, 123)
+    assert.equal(entry.maxTokens, undefined)
+    assert.equal(entry.reasoningEfforts, undefined)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('a hand-written value in DSH settings is preserved and adopted into the ledger', async () => {
+  const model = { id: 'gemini-x' }
+  const { controller, document, dir } = await controllerFor({ googleModels: [model] })
+  try {
+    controller.modelsDevIndex = indexModelsDev(DEV_PAYLOAD)
+    await controller.autoFillMetadata(devTarget([model]))
+    document[PIAI].providers.google.models[0].contextWindow = 999
+    const edited = { id: 'gemini-x', contextWindow: 999 }
+    const target = devTarget([edited])
+    target.revision = 2
+    await controller.autoFillMetadata(target)
+    assert.equal(document[PIAI].providers.google.models[0].contextWindow, 999)
+    assert.equal(document[PIAI].providers.google.models[0].maxTokens, 100)
+    const record = controller.metadataState().records.google['gemini-x']
+    assert.equal(record.fields.contextWindow.value, 999)
+    assert.equal(record.fields.contextWindow.source, 'user')
+    assert.equal(record.fields.contextWindow.external, true)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+
+test('the metadata tab shows the live settings value after a hand edit', async () => {
+  const model = { id: 'gemini-x' }
+  const { controller, document, dir } = await controllerFor({ googleModels: [model] })
+  try {
+    controller.modelsDevIndex = indexModelsDev(DEV_PAYLOAD)
+    await controller.autoFillMetadata(devTarget([model]))
+    document[PIAI].providers.google.models[0].contextWindow = 999
+    const target = devTarget(document[PIAI].providers.google.models)
+    const view = controller.metadataView([target])
+    const row = view.models[0]
+    assert.equal(row.fields.contextWindow.value, 999)
+    assert.equal(row.fields.contextWindow.source, 'user')
+    assert.equal(row.fields.contextWindow.external, true)
+    assert.equal(row.fields.maxTokens.value, 100)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('an official value overrides a hand-written DSH value', async () => {
+  const model = { id: 'gemini-x' }
+  const { controller, document, dir } = await controllerFor({ googleModels: [model] })
+  try {
+    controller.modelsDevIndex = indexModelsDev(DEV_PAYLOAD)
+    await controller.autoFillMetadata(devTarget([model]))
+    document[PIAI].providers.google.models[0].contextWindow = 999
+    controller.store.data.checks = {
+      google: { status: 'ok', catalog: [{ id: 'gemini-x', contextWindow: 1000, maxTokens: 100 }] },
+    }
+    const edited = { id: 'gemini-x', contextWindow: 999 }
+    const target = devTarget([edited])
+    target.revision = 2
+    await controller.autoFillMetadata(target)
+    assert.equal(document[PIAI].providers.google.models[0].contextWindow, 1000)
+    const field = controller.metadataState().records.google['gemini-x'].fields.contextWindow
+    assert.equal(field.value, 1000)
+    assert.equal(field.source, 'official')
+    assert.equal(field.external, undefined)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('revert preserves a value rewritten outside the panel instead of deleting it', async () => {
+  const { controller, document, dir } = await controllerFor({ googleModels: [{ id: 'gemini-x', contextWindow: 999 }] })
+  try {
+    controller.metadataState().records.google = {
+      'gemini-x': {
+        provider: 'google', id: 'gemini-x', pending: true,
+        fields: { contextWindow: { value: 1000, source: 'models.dev', confidence: 'medium' } },
+        log: [],
+      },
+    }
+    const view = await controller.revertMetadata({ provider: 'google', id: 'gemini-x' })
+    assert.equal(view.metadata.pendingCount, 1)
+    assert.match(controller.takeMetadataNotice(), /保留/)
+    assert.equal(document[PIAI].providers.google.models[0].contextWindow, 999)
+    const row = controller.metadataState().records.google['gemini-x'].fields.contextWindow
+    assert.equal(row.value, 999)
+    assert.equal(row.source, 'user')
+    assert.equal(row.external, true)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('a reverted fallback is not silently filled again on the next auto-fill', async () => {
+  const model = { id: 'gemini-x' }
+  const { controller, document, dir } = await controllerFor({ googleModels: [model] })
+  try {
+    controller.modelsDevIndex = indexModelsDev(DEV_PAYLOAD)
+    await controller.autoFillMetadata(devTarget([model]))
+    assert.equal(document[PIAI].providers.google.models[0].contextWindow, 1000)
+    await controller.revertMetadata({ provider: 'google', id: 'gemini-x' })
+    const afterRevert = document[PIAI].providers.google.models[0]
+    assert.equal(afterRevert.contextWindow, undefined)
+    assert.equal(afterRevert.maxTokens, undefined)
+    assert.equal(afterRevert.reasoningEfforts, undefined)
+    const saved = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'))
+    assert.ok(saved.metadata.records.google['gemini-x'].rejected.contextWindow, 'tombstone survives a restart')
+    await controller.store.load()
+    const reloaded = controller.metadataState().records.google['gemini-x']
+    assert.ok(reloaded.rejected.contextWindow, 'tombstone survives a state reload')
+    await controller.autoFillMetadata(devTarget([afterRevert]))
+    const afterSecondFill = document[PIAI].providers.google.models[0]
+    assert.equal(afterSecondFill.contextWindow, undefined)
+    assert.equal(afterSecondFill.maxTokens, undefined)
+    assert.equal(afterSecondFill.reasoningEfforts, undefined)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('an official value can still replace a tombstoned fallback', async () => {
+  const model = { id: 'gemini-x' }
+  const { controller, document, dir } = await controllerFor({ googleModels: [model] })
+  try {
+    controller.modelsDevIndex = indexModelsDev(DEV_PAYLOAD)
+    await controller.autoFillMetadata(devTarget([model]))
+    await controller.revertMetadata({ provider: 'google', id: 'gemini-x' })
+    assert.equal(controller.metadataState().records.google['gemini-x'].rejected.contextWindow !== undefined, true)
+    controller.store.data.checks = {
+      google: { status: 'ok', catalog: [{ id: 'gemini-x', contextWindow: 1000, maxTokens: 100 }] },
+    }
+    const target = devTarget(document[PIAI].providers.google.models)
+    target.revision = undefined
+    await controller.autoFillMetadata(target)
+    const entry = document[PIAI].providers.google.models[0]
+    assert.equal(entry.contextWindow, 1000)
+    const record = controller.metadataState().records.google['gemini-x']
+    assert.equal(record.fields.contextWindow.source, 'official')
+    assert.equal(record.rejected.contextWindow, undefined)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('revert refuses an inherited catalog and a model that disappeared from the list', async () => {
+  const { controller, dir, writes } = await controllerFor()
+  try {
+    controller.metadataState().records.google = {
+      'gemini-x': { provider: 'google', id: 'gemini-x', pending: true, fields: { maxTokens: { value: 10, source: 'models.dev' } }, log: [] },
+    }
+    await assert.rejects(
+      () => controller.revertMetadata({ provider: 'google', id: 'gemini-x' }),
+      (error) => error.status === 409,
+    )
+    assert.deepEqual(writes, [])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+
+  const second = await controllerFor({ googleModels: [{ id: 'other' }] })
+  try {
+    second.controller.metadataState().records.google = {
+      'gemini-x': { provider: 'google', id: 'gemini-x', pending: true, fields: { maxTokens: { value: 10, source: 'models.dev' } }, log: [] },
+    }
+    await assert.rejects(
+      () => second.controller.revertMetadata({ provider: 'google', id: 'gemini-x' }),
+      (error) => error.status === 409,
+    )
+    assert.deepEqual(second.writes, [])
+  } finally {
+    await rm(second.dir, { recursive: true, force: true })
+  }
+})
+
+
+test('revert refuses to strip limits the host needs for a catalog-less model', async () => {
+  const model = { id: 'custom-x', contextWindow: 1000, maxTokens: 100 }
+  const { controller, document, writes, dir } = await controllerFor({
+    googleModels: [model],
+    resolveModelInfo: () => { throw new Error('not in the native catalog') },
+  })
+  try {
+    controller.metadataState().records.google = {
+      'custom-x': {
+        provider: 'google', id: 'custom-x', pending: true,
+        fields: {
+          contextWindow: { value: 1000, source: 'models.dev', confidence: 'medium' },
+          maxTokens: { value: 100, source: 'models.dev', confidence: 'medium' },
+        },
+        log: [],
+      },
+    }
+    await assert.rejects(
+      () => controller.revertMetadata({ provider: 'google', id: 'custom-x' }),
+      (error) => error.status === 409 && /宿主必需/.test(error.message),
+    )
+    assert.deepEqual(writes, [])
+    assert.deepEqual(document[PIAI].providers.google.models[0], model)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('a settings conflict while editing becomes a 409, not a 500', async () => {
+  let bumped = false
+  const { controller, dir } = await controllerFor({
+    googleModels: [{ id: 'gemini-x' }],
+    onMutate({ revisions }) {
+      if (!bumped) { bumped = true; revisions[PIAI] += 1 }
+    },
+  })
+  try {
+    await assert.rejects(
+      () => controller.updateMetadata({ provider: 'google', id: 'gemini-x', field: 'contextWindow', value: 123 }),
+      (error) => error.status === 409 && error.safe === true,
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('deepseek maxTokens is clamped to the route limit during auto-fill', async () => {
+  const { controller, document, dir } = await controllerFor({ googleModels: [{ id: 'gemini-x' }] })
+  try {
+    controller.modelsDevIndex = indexModelsDev(DEV_PAYLOAD)
+    const target = devTarget([{ id: 'gemini-x' }])
+    target.adapter = 'deepseek'
+    target.modelMaxTokens = 64
+    await controller.autoFillMetadata(target)
+    assert.equal(document[PIAI].providers.google.models[0].maxTokens, 64)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })
