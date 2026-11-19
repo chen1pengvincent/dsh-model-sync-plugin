@@ -88,6 +88,8 @@ test('lookup is exact per provider and never borrows another route numbers', () 
   assert.equal(google?.exact, true)
   assert.equal(google?.family, 'gemini')
   assert.equal(google?.modality, '文本+图像+音频')
+  assert.deepEqual(google?.input, ['text', 'image'])
+  assert.equal(openrouter?.input, undefined)
 })
 
 test('canonical-only information is display-only, never numbers', () => {
@@ -98,11 +100,13 @@ test('canonical-only information is display-only, never numbers', () => {
   assert.equal(meta?.reasoningEfforts, undefined)
   assert.equal(meta?.family, 'gemini')
   assert.equal(meta?.modality, '文本+图像+音频')
+  assert.equal(meta?.input, undefined)
   assert.equal(meta?.exact, false)
   assert.equal(meta?.confidence, 'low')
   const canonicalOnly = metadataFor(index, 'reseller', 'canonical-only')
   assert.equal(canonicalOnly?.contextWindow, undefined)
   assert.equal(canonicalOnly?.maxTokens, undefined)
+  assert.equal(canonicalOnly?.input, undefined)
   assert.equal(canonicalOnly?.family, 'gemini')
 })
 
