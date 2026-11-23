@@ -191,11 +191,121 @@ test('model review separates route identity, evidence, pending and user decision
     assert.equal(before[1].level, 'official')
     assert.equal(before[1].pending, false)
     await controller.saveReview({ ...before[0], decision: 'ignore' })
-    const after = (await view()).models.find((row) => row.provider === 'google')
+    const reviewed = () => view().then(({ models }) => models.find((row) => row.provider === 'google'))
+    assert.equal((await reviewed()).pending, true, 'an official difference stays visible even after ignoring')
+    await controller.saveReview({ ...await reviewed(), decision: 'keep' })
+    const after = await reviewed()
     assert.equal(after.level, 'unverified')
-    assert.equal(after.pending, false)
+    assert.equal(after.pending, true)
+    assert.equal(after.fields.maxTokens.locked, true)
+    assert.equal(after.fields.maxTokens.value, 5000)
+    controller.store.data.checks.google.catalog[0] = { ...model, maxTokens: 7000 }
     controller.store.data.checks.google.reviewFacts[id].maxTokens = 7000
-    assert.equal((await view()).models.find((row) => row.provider === 'google').pending, true)
+    controller.nativeCatalog = async () => []
+    await controller.autoFillMetadata(await controller.freshTarget('google', PIAI))
+    const locked = await reviewed()
+    assert.equal(locked.fields.maxTokens.value, 5000)
+    assert.equal(locked.fields.maxTokens.candidate, 7000)
+    assert.equal(locked.pending, true)
+    const adopted = await controller.saveReview({
+      ...locked, changes: { maxTokens: { value: 7000, candidateSource: 'official', useCandidate: true } },
+    })
+    assert.equal(adopted.review.models.find((row) => row.provider === 'google').pending, false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('ignore lasts until the affected upstream value changes', async () => {
+  const model = { id: 'gemini-x', contextWindow: 1000, input: ['text'] }
+  const { controller, dir } = await controllerFor({ googleModels: [model] })
+  try {
+    const get = async () => (await controller.view()).review.models.find((row) => row.id === model.id)
+    controller.modelsDevIndex = indexModelsDev(DEV_PAYLOAD)
+    const before = await get()
+    assert.equal(before.fields.maxTokens.candidate, 100)
+    await controller.saveReview({ ...before, decision: 'ignore' })
+    assert.equal((await get()).pending, false)
+    const changed = structuredClone(DEV_PAYLOAD)
+    changed.google.models['gemini-x'].limit.output = 150
+    controller.modelsDevIndex = indexModelsDev(changed)
+    controller.refreshReviewIgnores(await controller.freshTarget('google', PIAI))
+    assert.equal((await get()).pending, true)
+    controller.modelsDevIndex = indexModelsDev(DEV_PAYLOAD)
+    assert.equal((await get()).pending, true, 'returning to an older value does not revive an expired ignore')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('saving an optional candidate checks the exact value and source shown in the preview', async () => {
+  const model = { id: 'sample', contextWindow: 10000, maxTokens: 4000, input: ['text'] }
+  const { controller, dir, writes } = await controllerFor({ googleModels: [model] })
+  try {
+    const facts = { reasoningEfforts: { low: 'low' } }
+    controller.store.data.checks = { google: { status: 'ok', catalog: [model], reviewFacts: { [model.id]: facts } } }
+    const before = (await controller.view()).review.models.find((row) => row.id === model.id)
+    const changes = { reasoningEfforts: { value: { low: 'low' }, candidateSource: 'official', useCandidate: true } }
+    facts.reasoningEfforts = { high: 'high' }
+    await assert.rejects(() => controller.saveReview({ ...before, changes }), /候选值或来源已变化/)
+    assert.equal(writes.length, 0)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('a listing for an old endpoint cannot be applied after the route changes', async () => {
+  const id = 'sample'
+  const { controller, document, settings, dir } = await controllerFor({ googleModels: [{ id }] })
+  try {
+    controller.proxyState = async () => ({ enabled: false, available: false })
+    controller.list = async () => {
+      const { revision } = settings.describe().find(({ ns }) => ns === PIAI)
+      await settings.mutate(PIAI, [{ op: 'set', path: ['providers', 'google', 'baseURL'], value: 'https://replacement.example/v1' }], revision)
+      return { api: 'openai-completions', models: [{ id, contextWindow: 123456 }] }
+    }
+    const { sync } = await controller.check({ provider: 'google' })
+    assert.equal(sync.fields.updated, 0)
+    assert.equal(sync.incomplete[0].provider, 'google')
+    assert.deepEqual(document[PIAI].providers.google.models, [{ id }])
+    assert.equal((await controller.view()).review.models.find((row) => row.id === id).fields.contextWindow.candidate, undefined)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('a skipped provider does not repeat the previous provider’s update count', async () => {
+  const id = 'sample'
+  const { controller, dir, writes } = await controllerFor({ googleModels: [{ id }] })
+  try {
+    controller.proxyState = async () => ({ enabled: false, available: false })
+    controller.list = async ({ baseURL }) => ({
+      api: 'openai-completions',
+      models: baseURL === GOOGLE_BASE ? [{ id, contextWindow: 123456 }] : [],
+    })
+    const { sync } = await controller.check()
+    assert.equal(writes.length, 1)
+    assert.deepEqual(sync.fields, { updated: 1, promoted: 0, adopted: 0 })
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('automatic metadata rollback leaves later edits intact when the ledger fails', async () => {
+  const id = 'sample'
+  const { controller, document, settings, dir } = await controllerFor({ googleModels: [{ id, maxTokens: 4000 }] })
+  try {
+    const target = await controller.freshTarget('google', PIAI)
+    controller.store.data.checks = { google: { status: 'ok', catalog: [{ id, contextWindow: 12000 }] } }
+    controller.nativeCatalog = async () => []
+    controller.store.save = async () => {
+      const current = settings.describe().find(({ ns }) => ns === PIAI)
+      const models = current.value.providers.google.models.map((row) => ({ ...row, maxTokens: 6800 }))
+      await settings.mutate(PIAI, [{ op: 'set', path: target.settingsPath, value: models }], current.revision)
+      throw new Error('disk full')
+    }
+    await assert.rejects(() => controller.autoFillMetadata(target), /已有其他变更/)
+    assert.equal(document[PIAI].providers.google.models[0].maxTokens, 6800)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

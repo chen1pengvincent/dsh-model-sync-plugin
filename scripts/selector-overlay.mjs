@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { asarModules } from './asar.mjs'
 
 const packageName = '@deepseek-ai/dsh-client-ui-model-selection'
-const supportedVersion = '0.2.2-rc.3'
+const supportedVersions = ['0.2.2-rc.3', '0.2.2-rc.5']
 const begin = '# dsh-model-sync selector: begin'
 const end = '# dsh-model-sync selector: end'
 
@@ -57,13 +57,17 @@ async function main() {
   const base = start === -1 ? original : original.slice(0, start) + original.slice(stop + end.length).replace(/^\n/, '')
   const overlayPath = join(dir, 'model-sync-selector')
   let next = base
+  let version
   if (action === '--apply') {
     if (/^\s*-\s*id:\s*['"]?(?:ui-model-selection|model-sync-ui-model-selection)['"]?\s*$/m.test(base)) {
       throw new Error('当前 profile 已单独调整官方模型选择器，已保留它的配置。')
     }
     const upstream = join(asarModules(), packageName)
     const manifest = JSON.parse(await readFile(join(upstream, 'package.json'), 'utf8'))
-    if (manifest.version !== supportedVersion) throw new Error(`当前适配层支持 DSH ${supportedVersion}，发现 ${manifest.version}。`)
+    version = manifest.version
+    if (!supportedVersions.includes(version)) {
+      throw new Error(`当前适配层支持 DSH ${supportedVersions.join('、')}，发现 ${version}。`)
+    }
     const client = patchNativeSelector(await readFile(join(upstream, manifest.exports['./client'].default), 'utf8'))
     await mkdir(overlayPath, { recursive: true })
     await writeFile(join(overlayPath, 'package.json'), JSON.stringify({
@@ -86,7 +90,7 @@ async function main() {
     await writeFile(temporary, next, { mode: 0o600 })
     await rename(temporary, patchPath)
   }
-  console.log(action === '--apply' ? `已为 ${profile} 安装 DSH ${supportedVersion} 原生选择器适配。` : `已为 ${profile} 恢复原生选择器加载配置。`)
+  console.log(action === '--apply' ? `已为 ${profile} 安装 DSH ${version} 原生选择器适配。` : `已为 ${profile} 恢复原生选择器加载配置。`)
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

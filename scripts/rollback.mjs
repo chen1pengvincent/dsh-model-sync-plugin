@@ -45,6 +45,7 @@ function parseArgs(argv) {
     else if (arg.startsWith('--state-from=')) options.stateFrom = arg.slice('--state-from='.length)
     else throw new Error(`unknown argument "${arg}"`)
   }
+  if (!/^[a-zA-Z0-9][\w-]*$/.test(options.profile)) throw new Error('invalid profile')
   return options
 }
 
@@ -98,9 +99,45 @@ async function linkTarget(linkPath) {
   return info.isDirectory() ? '(a real directory, not a symlink)' : '(a file)'
 }
 
+async function generationsToRemove(profilesRoot, profile, current, next) {
+  const keep = generationsReferencedBy(next)
+  try {
+    const profiles = await readdir(profilesRoot, { withFileTypes: true })
+    for (const entry of profiles) {
+      if (entry.name === profile || entry.name === 'node_modules' || entry.name.startsWith('.')) continue
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
+      const directory = join(profilesRoot, entry.name)
+      const manifest = await readFile(join(directory, 'package.json'), 'utf8').then(JSON.parse).catch((error) => {
+        if (error.code !== 'ENOENT') throw error
+        return undefined
+      })
+      const link = await readlink(join(directory, 'node_modules', PACKAGE)).catch((error) => {
+        if (!['ENOENT', 'EINVAL'].includes(error.code)) throw error
+        return undefined
+      })
+      for (const name of generationsReferencedBy([manifest, link])) keep.add(name)
+    }
+    const live = await readdir(join(profilesRoot, '.generations', 'live')).catch((error) => {
+      if (error.code !== 'ENOENT') throw error
+      return []
+    })
+    const retiring = generationsReferencedBy(current)
+    return generationDirs(live.filter((name) => retiring.has(name)), [...keep])
+  } catch {
+    // An unreadable profile is not proof that a generation has no other owner.
+    return []
+  }
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2))
-  const profileDir = join(dshHome(), 'profiles', options.profile)
+  const profilesRoot = join(dshHome(), 'profiles')
+  const profileDir = join(profilesRoot, options.profile)
+  const pending = await lstat(join(profileDir, '.model-sync-install-pending')).catch((error) => {
+    if (error.code !== 'ENOENT') throw error
+    return undefined
+  })
+  if (pending) throw new Error('finish recovering the pending install before running rollback')
   const manifestPath = join(profileDir, 'package.json')
 
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
@@ -115,15 +152,9 @@ async function main() {
   const linkPath = join(profileDir, 'node_modules', PACKAGE)
   const target = await linkTarget(linkPath)
 
-  const generationsRoot = join(dshHome(), 'profiles', '.generations', 'live')
+  const generationsRoot = join(profilesRoot, '.generations', 'live')
   const { next, changes, warnings } = planRevert({ manifest, backup })
-  // Only generations the *reverted* manifest no longer points at may go: the
-  // backup's override is `link:../.generations/live/<old>`, and deleting the
-  // old directory would leave that link dangling.
-  const generations = generationDirs(
-    await readdir(generationsRoot).catch(() => []),
-    [...generationsReferencedBy(next)],
-  )
+  const generations = await generationsToRemove(profilesRoot, options.profile, manifest, next)
   const states = stateDirs(await readdir(profileDir).catch(() => []))
 
   console.log(`profile      ${profileDir}`)
@@ -178,7 +209,8 @@ async function main() {
     await symlink(linkWanted, linkPath, 'dir')
     console.log(`relinked node_modules/${PACKAGE} -> ${linkWanted}`)
   }
-  for (const name of generations) {
+  const removable = await generationsToRemove(profilesRoot, options.profile, manifest, next)
+  for (const name of generations.filter((name) => removable.includes(name))) {
     const path = join(generationsRoot, name)
     // Belt and braces: only ever remove a path this script computed from the
     // package name, never one handed in by a caller.

@@ -269,3 +269,25 @@ test('the CLI really reverts a profile tree, and keeps what it must keep', async
     await rm(home, { recursive: true, force: true })
   }
 })
+
+test('rolling back Desktop keeps a generation referenced by Web', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'model-sync-shared-generation-'))
+  const profiles = join(home, 'profiles')
+  const desktop = join(profiles, 'desktop')
+  const web = join(profiles, 'web')
+  const shared = join(profiles, '.generations', 'live', NEW_GENERATION)
+  try {
+    await mkdir(shared, { recursive: true })
+    await mkdir(desktop, { recursive: true })
+    await mkdir(web, { recursive: true })
+    await writeFile(join(desktop, 'package.json'), JSON.stringify(installed()))
+    await writeFile(join(desktop, '.package.json.2026-11-15T16-22-21-739Z.bak'), JSON.stringify(previous()))
+    const webManifest = JSON.stringify(installed())
+    await writeFile(join(web, 'package.json'), webManifest)
+    await run(process.execPath, [script, '--profile', 'desktop', '--apply'], { env: { ...process.env, DSH_HOME: home } })
+    assert.equal(await readFile(join(web, 'package.json'), 'utf8'), webManifest)
+    assert.equal((await stat(shared)).isDirectory(), true)
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})

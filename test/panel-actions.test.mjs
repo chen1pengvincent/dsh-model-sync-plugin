@@ -360,3 +360,43 @@ test('a save that fails halfway keeps only what is still pending', async () => {
   const retried = panel.calls.slice(beforeRetry).filter(({ url }) => url.endsWith('/apply'))
   assert.deepEqual(retried.map(({ body }) => JSON.parse(body).provider), ['alpha'])
 })
+
+test('the normal filter shows normal models in place and returning to the original number clears the draft', async () => {
+  const model = {
+    provider: 'alpha', id: 'normal-model', name: 'Normal Model', issues: [], pending: false, level: 'partial', canWrite: true,
+    fields: { contextWindow: { value: 20000 }, maxTokens: { value: 12000 }, input: { value: ['text'] }, reasoningEfforts: {} },
+  }
+  const panel = await mount({ view: view({ review: { pendingCount: 0, models: [model], history: [] } }) })
+  panel.click('待确认模型信息')
+  assert.doesNotMatch(panel.text(), /Normal Model/)
+  const select = findAll(panel.tree, (node) => node.props['aria-label'] === '筛选当前状态')[0]
+  select.props.onChange({ target: { value: 'none' } })
+  panel.rerender()
+  assert.match(panel.text(), /Normal Model/)
+  assert.equal(panel.buttons('待处理')[0].props['aria-pressed'], true)
+
+  for (const value of ['15000', '12000']) {
+    const output = findAll(panel.tree, (node) => node.type === 'input' && node.props['aria-label'] === '最大输出')[0]
+    output.props.onChange({ target: { value } })
+    panel.rerender()
+    assert.equal(panel.buttons('预览并保存')[0].props.disabled, value === '12000')
+  }
+})
+
+test('a failed upstream check is shown as incomplete with the supplier name', async () => {
+  const payload = view()
+  const panel = await mount({
+    view: payload,
+    fetch: async (url) => ({
+      ok: true, status: 200, headers: { get: () => 'application/json' },
+      async json() {
+        if (!url.endsWith('/check')) return { ok: true, view: payload }
+        return { ok: true, results: [{ provider: 'alpha', status: 'error' }], sync: { updated: 0 } }
+      },
+    }),
+  })
+  const check = panel.buttons('检查更新')[0]
+  await check.props.onClick()
+  panel.rerender()
+  assert.match(panel.text(), /检查未全部完成.*alpha.*目录检查失败/)
+})

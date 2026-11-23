@@ -2,11 +2,8 @@
 /**
  * Install this plugin into a DSH profile, replacing whatever version is there.
  *
- * The replacement is not a simple `add`: the previous release used the same
- * package name, and DSH refuses a second install of a name that already
- * exists. So the steps are always remove → add, with a backup of the old
- * plugin's state first (its ledger is a different schema and must not be read
- * as ours).
+ * Prepare the new generation before switching the profile references. The
+ * pending directory holds the old link and manifest until verification.
  *
  * Two modes:
  *   node scripts/install.mjs --profile desktop            # dry run, prints the plan
@@ -17,7 +14,7 @@
  */
 
 import { execFile } from 'node:child_process'
-import { access, copyFile, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -45,6 +42,10 @@ function parseArgs(argv) {
     else if (arg.startsWith('--profile=')) { options.profile = arg.slice('--profile='.length) }
     else throw new Error(`unknown argument "${arg}"`)
   }
+  if (!/^[a-zA-Z0-9][\w-]*$/.test(options.profile)) throw new Error('invalid profile')
+  if (options.generation !== undefined && !/^dsh-model-sync\+[\w.+-]+$/.test(options.generation)) {
+    throw new Error('invalid generation name')
+  }
   return options
 }
 
@@ -59,7 +60,7 @@ async function generationFor(generationsRoot, source, version) {
   const matches = []
   for (const name of names) {
     if (!name.startsWith(`${PACKAGE}+`)) continue
-    const info = await readFile(join(generationsRoot, name, 'generation.json'), 'utf8').then(JSON.parse, () => undefined)
+    const info = await readFile(join(generationsRoot, name, 'generation.json'), 'utf8').then(JSON.parse).catch(() => undefined)
     // Only reuse a generation that describes *this* version: a version bump
     // must produce a new directory, otherwise the projection claims a version
     // the directory itself does not carry.
@@ -100,15 +101,119 @@ async function cliLauncher() {
   throw new Error('could not run the DSH CLI; set DSH_NODE_EXECUTABLE and DSH_INSTALL_DIR')
 }
 
+async function entryAt(path) {
+  return lstat(path).catch((error) => {
+    if (error.code !== 'ENOENT') throw error
+    return undefined
+  })
+}
+
+async function pointsTo(path, source) {
+  return (await entryAt(path))?.isSymbolicLink() === true &&
+    resolve(dirname(path), await readlink(path)) === source
+}
+
+async function prepareGeneration(root, generation, source, version, create) {
+  const directory = join(root, generation)
+  if (create && !await entryAt(directory)) {
+    await mkdir(root, { recursive: true })
+    const staged = await mkdtemp(join(root, '.model-sync-generation-'))
+    try {
+      for (const file of generationFiles({ source, version })) await writeFile(join(staged, file.path), file.body)
+      await mkdir(join(staged, 'node_modules'))
+      await symlink(source, join(staged, 'node_modules', PACKAGE), 'dir')
+      await rename(staged, directory).catch((error) => {
+        if (!['EEXIST', 'ENOTEMPTY'].includes(error.code)) throw error
+      })
+    } finally {
+      await rm(staged, { recursive: true, force: true })
+    }
+  }
+  const info = JSON.parse(await readFile(join(directory, 'generation.json'), 'utf8'))
+  const link = join(directory, 'node_modules', PACKAGE)
+  if (info.pluginName !== PACKAGE || info.sourceSpec !== source || info.version !== version || !await pointsTo(link, source)) {
+    throw new Error('generation does not match the requested source and version')
+  }
+}
+
+async function finishTransaction(pending) {
+  const completed = `${pending}-${process.pid}-${Date.now()}`
+  await rename(pending, completed)
+  await rm(completed, { recursive: true, force: true }).catch(() => undefined)
+}
+
+async function recoverTransaction(pending, profileDir, plan) {
+  if (await entryAt(join(pending, 'committed'))) {
+    await finishTransaction(pending)
+    return
+  }
+  const manifest = join(profileDir, 'package.json')
+  const oldManifest = await readFile(join(pending, 'old-manifest'))
+  const newManifest = await readFile(join(pending, 'new-manifest'))
+  const current = await readFile(manifest)
+  const replaced = !await entryAt(join(pending, 'replacement-manifest'))
+  if (replaced && !current.equals(oldManifest) && !current.equals(newManifest)) {
+    throw new Error(`profile manifest changed during installation; review the backup in ${pending}`)
+  }
+
+  const backupLink = join(pending, 'old-link')
+  const liveLink = join(profileDir, 'node_modules', PACKAGE)
+  if (await entryAt(backupLink)) {
+    if (await entryAt(liveLink)) {
+      if (!await pointsTo(liveLink, plan.source)) throw new Error('profile module link changed during installation')
+      await unlink(liveLink)
+    }
+    await rename(backupLink, liveLink)
+  } else if (!plan.hadLink && !await entryAt(join(pending, 'new-link')) && await entryAt(liveLink)) {
+    if (!await pointsTo(liveLink, plan.source)) throw new Error('profile module link changed during installation')
+    await unlink(liveLink)
+  }
+
+  if (plan.archive) {
+    const archive = join(profileDir, plan.archive)
+    if (await entryAt(archive)) {
+      if (await entryAt(join(profileDir, 'model-sync'))) throw new Error('profile state changed during installation')
+      await rename(archive, join(profileDir, 'model-sync'))
+    }
+  }
+
+  if (replaced && !current.equals(oldManifest)) {
+    const restore = join(pending, 'restore-manifest')
+    await copyFile(join(pending, 'old-manifest'), restore)
+    if (!(await readFile(manifest)).equals(current)) throw new Error('profile manifest changed during recovery')
+    await rename(restore, manifest)
+  }
+  await finishTransaction(pending)
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2))
   const profileDir = join(dshHome(), 'profiles', options.profile)
   const manifestPath = join(profileDir, 'package.json')
-  const source = resolve(here, '..')
+  const pending = join(profileDir, '.model-sync-install-pending')
+  if (await entryAt(pending)) {
+    if (options.dryRun) {
+      console.log('An unfinished install exists. Applying the install will recover it before making any changes.')
+      return
+    }
+    const previous = JSON.parse(await readFile(join(pending, 'plan.json'), 'utf8'))
+    let running = true
+    try {
+      process.kill(previous.pid, 0)
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw error
+      running = false
+    }
+    if (running) throw new Error('another install is still running for this profile')
+    await recoverTransaction(pending, profileDir, previous)
+    console.log('recovered the unfinished install')
+  }
+  const source = await realpath(resolve(here, '..'))
   const own = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'))
   const version = `${own.version ?? '0.0.0'}`
 
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  const originalManifest = await readFile(manifestPath)
+  const manifest = JSON.parse(originalManifest)
   const installed = manifest.dependencies?.[PACKAGE]
   const bundled = (manifest.dsh?.profile?.bundles ?? []).includes(PACKAGE)
   // Informational only: the writes below never go through the CLI (see the note
@@ -136,15 +241,17 @@ async function main() {
   console.log(`cli          ${launcher === undefined ? '(not runnable here; not needed)' : `${launcher.script} (dsh ${launcher.version})`}`)
 
   const stateDir = join(profileDir, 'model-sync')
-  const stateVersion = await readFile(join(stateDir, 'state.json'), 'utf8')
-    .then(JSON.parse, () => undefined)
-    .then((state) => state?.version, () => undefined)
+  const stateVersion = await readFile(join(stateDir, 'state.json'), 'utf8').then(JSON.parse).then((state) => state?.version).catch((error) => {
+    if (error.code === 'ENOENT' || error instanceof SyntaxError) return undefined
+    throw error
+  })
+  const archiveState = stateVersion !== 1 && await entryAt(stateDir) !== undefined
   const steps = [
     {
       label:
         stateVersion === 1
           ? 'keep the state directory (it already belongs to this version)'
-          : (await access(stateDir).then(() => true, () => false))
+          : archiveState
             ? "move the previous release's state directory aside"
             : 'no previous state directory to move',
     },
@@ -168,85 +275,78 @@ async function main() {
     return
   }
 
-  // 1. The old state directory is a different schema. Move it aside rather than
-  // letting this version read it — `state.json` there is a 249 KB ledger whose
-  // keys mean something else entirely.
-  const legacyDir = join(profileDir, `model-sync.legacy-${new Date().toISOString().replace(/[:.]/g, '-')}`)
-  if (stateVersion === 1) {
-    // Re-installing over our own ledger must not throw it away: the snapshots
-    // and the audit trail in there are the user's only copy.
-    console.log('state directory already belongs to this version; left in place')
-  } else {
-    try {
-      await access(stateDir)
-      await rename(stateDir, legacyDir)
-      console.log(`moved old state → ${legacyDir}`)
-    } catch {
-      console.log('no previous state directory')
-    }
-  }
+  if (own.name !== PACKAGE) throw new Error('the source manifest does not describe dsh-model-sync')
+  if (stateVersion === 1) console.log('state directory already belongs to this version; left in place')
 
-  // 2. Keep a copy of the manifest so a failed install can be undone by hand.
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   const manifestBackup = join(profileDir, `.package.json.${stamp}.bak`)
-  await copyFile(manifestPath, manifestBackup)
-  console.log(`manifest backed up → ${manifestBackup}`)
-
-  // 3. The Desktop profile is reserved: `dsh plugin` refuses it by name
-  // (`bin.js`: "profile \"desktop\" is managed exclusively by the Electron
-  // application"), and the bundled pnpm cannot touch this tree either — the
-  // existing node_modules was linked from store v10 while the bundled pnpm
-  // appends its own v11 store and aborts with ERR_PNPM_UNEXPECTED_STORE.
-  // A `link:` install is just a few facts, so write them directly.
-  if (needsGeneration) {
-    const dir = join(generationsRoot, generation)
-    for (const file of generationFiles({ source, version })) {
-      const path = join(dir, file.path)
-      await mkdir(dirname(path), { recursive: true })
-      await writeFile(path, file.body)
-    }
-    console.log(`generation   ${dir}`)
-  }
-  const generationLink = join(generationsRoot, generation, 'node_modules', PACKAGE)
-  await rm(generationLink, { recursive: true, force: true })
-  await mkdir(dirname(generationLink), { recursive: true })
-  await symlink(source, generationLink, 'dir')
-
-  if (changes.length > 0) {
-    // Only rewrite the manifest when something actually changes: the desktop
-    // app owns this file too, and a no-op install should leave it untouched.
-    await writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`)
-    for (const change of changes) console.log(`  · ${change}`)
-  }
-
   const linkPath = join(profileDir, 'node_modules', PACKAGE)
-  await rm(linkPath, { recursive: true, force: true })
   await mkdir(dirname(linkPath), { recursive: true })
-  await symlink(source, linkPath, 'dir')
-  console.log(`symlink      node_modules/${PACKAGE} -> ${source}`)
+  await prepareGeneration(generationsRoot, generation, source, version, needsGeneration)
 
-  // 4. Verify every reference, not just the one this script used to write.
-  const after = JSON.parse(await readFile(manifestPath, 'utf8'))
-  const linked = `link:${source}`
-  const projection = after.dsh?.desktop?.generationProjection?.plugins?.[PACKAGE]
-  // Read the file rather than importing it: a JSON import needs an import
-  // attribute and silently fails without one, which made this check report a
-  // broken install on machines that were fine.
-  const resolved = await readFile(join(linkPath, 'package.json'), 'utf8').then(JSON.parse, () => undefined)
-  const checks = [
-    ['dependencies', after.dependencies?.[PACKAGE] === linked],
-    ['pnpm.overrides', options.override === false || after.pnpm?.overrides?.[PACKAGE] === linked],
-    ['profile.bundles', (after.dsh?.profile?.bundles ?? []).includes(PACKAGE)],
-    ['generationProjection', projection?.generationId === generation],
-    ['module resolves', resolved?.name === PACKAGE],
-  ]
-  console.log('')
-  for (const [label, ok] of checks) console.log(`  ${ok ? '✅' : '❌'} ${label}`)
-  if (checks.some(([, ok]) => ok !== true)) {
-    const report = checks.filter(([, ok]) => ok !== true).map(([label]) => label).join(', ')
-    await writeFile(join(profileDir, 'model-sync-install-failed.txt'), `install did not take effect (${report})\nmanifest backup: ${manifestBackup}\n`)
-    throw new Error(`these references did not take effect: ${report}; the previous manifest is at ${manifestBackup}`)
+  const plan = {
+    pid: process.pid, source, hadLink: await entryAt(linkPath) !== undefined,
+    archive: archiveState ? `model-sync.legacy-${stamp}` : undefined,
   }
+  const newManifest = changes.length ? Buffer.from(`${JSON.stringify(next, null, 2)}\n`) : originalManifest
+  const staged = await mkdtemp(join(profileDir, '.model-sync-install-stage-'))
+  const mode = (await lstat(manifestPath)).mode & 0o777
+  try {
+    await writeFile(join(staged, 'plan.json'), JSON.stringify(plan), { mode: 0o600 })
+    await writeFile(join(staged, 'old-manifest'), originalManifest, { mode })
+    await writeFile(join(staged, 'new-manifest'), newManifest, { mode })
+    await writeFile(join(staged, 'replacement-manifest'), newManifest, { mode })
+    await symlink(source, join(staged, 'new-link'), 'dir')
+    await rename(staged, pending)
+  } finally {
+    await rm(staged, { recursive: true, force: true })
+  }
+
+  let interrupted = false
+  const interrupt = () => { interrupted = true }
+  const checkInterrupted = () => { if (interrupted) throw new Error('installation interrupted') }
+  process.on('SIGINT', interrupt)
+  process.on('SIGTERM', interrupt)
+  try {
+    checkInterrupted()
+    if (!(await readFile(manifestPath)).equals(originalManifest)) throw new Error('profile manifest changed; run the install again')
+    await copyFile(join(pending, 'old-manifest'), manifestBackup)
+    console.log(`manifest backed up → ${manifestBackup}`)
+    if (plan.archive) await rename(stateDir, join(profileDir, plan.archive))
+    checkInterrupted()
+    if (plan.hadLink) await rename(linkPath, join(pending, 'old-link'))
+    await rename(join(pending, 'new-link'), linkPath)
+    checkInterrupted()
+    if (!(await readFile(manifestPath)).equals(originalManifest)) throw new Error('profile manifest changed; run the install again')
+    if (changes.length) await rename(join(pending, 'replacement-manifest'), manifestPath)
+
+    const after = JSON.parse(await readFile(manifestPath, 'utf8'))
+    const linked = `link:${source}`
+    const projection = after.dsh?.desktop?.generationProjection?.plugins?.[PACKAGE]
+    const resolved = JSON.parse(await readFile(join(linkPath, 'package.json'), 'utf8'))
+    const checks = [
+      ['dependencies', after.dependencies?.[PACKAGE] === linked],
+      ['pnpm.overrides', options.override === false || after.pnpm?.overrides?.[PACKAGE] === linked],
+      ['profile.bundles', (after.dsh?.profile?.bundles ?? []).includes(PACKAGE)],
+      ['generationProjection', projection?.generationId === generation && projection.visibleVersion === version],
+      ['module resolves', resolved.name === PACKAGE && resolved.version === version && await pointsTo(linkPath, source)],
+    ]
+    for (const [label, ok] of checks) console.log(`  ${ok ? '✅' : '❌'} ${label}`)
+    if (checks.some(([, ok]) => !ok)) throw new Error('the new profile references did not verify')
+    checkInterrupted()
+    await writeFile(join(pending, 'committed'), '')
+  } catch (error) {
+    try {
+      await recoverTransaction(pending, profileDir, plan)
+    } catch (restoreError) {
+      throw new Error(`${error.message}; could not complete recovery: ${restoreError.message} (${pending})`)
+    }
+    throw error
+  } finally {
+    process.off('SIGINT', interrupt)
+    process.off('SIGTERM', interrupt)
+  }
+  await finishTransaction(pending)
   console.log('\ninstalled. Restart DSH to load the host half; the panel appears under Settings → 模型管理.')
   console.log(`undo: node scripts/rollback.mjs            (dry run first, then --apply)`)
 }

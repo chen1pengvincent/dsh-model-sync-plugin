@@ -154,3 +154,36 @@ test('the script installs over an old profile and leaves its ledger alone on a s
     await rm(home, { recursive: true, force: true })
   }
 })
+
+test('the installer recovers the old manifest, link and state from an interrupted switch', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'model-sync-interrupted-'))
+  const profile = join(home, 'profiles', 'desktop')
+  const pending = join(profile, '.model-sync-install-pending')
+  const oldSource = '/previous-version'
+  const newSource = '/new-version'
+  const oldManifest = JSON.stringify(withOldRelease())
+  const newManifest = JSON.stringify({ ...withOldRelease(), dependencies: { [PACKAGE]: 'link:' + newSource } })
+  const archive = 'model-sync.legacy-test'
+  try {
+    await mkdir(pending, { recursive: true })
+    await mkdir(join(profile, 'node_modules'))
+    await mkdir(join(profile, archive))
+    await writeFile(join(profile, archive, 'state.json'), '{"version":0}')
+    await writeFile(join(profile, 'package.json'), newManifest)
+    await writeFile(join(pending, 'old-manifest'), oldManifest)
+    await writeFile(join(pending, 'new-manifest'), newManifest)
+    await writeFile(join(pending, 'plan.json'), JSON.stringify({ pid: 2147483647, source: newSource, hadLink: true, archive }))
+    await symlink(oldSource, join(pending, 'old-link'), 'dir')
+    await symlink(newSource, join(profile, 'node_modules', PACKAGE), 'dir')
+
+    const env = { ...process.env, DSH_HOME: home, DSH_NODE_EXECUTABLE: '/nonexistent', DSH_INSTALL_DIR: '/nonexistent' }
+    // The missing generation deliberately stops the new install after recovery.
+    await assert.rejects(() => run(process.execPath, [script, '--apply', '--generation', PACKAGE + '+missing'], { env }),
+      (error) => error.stdout.includes('recovered the unfinished install') && error.stderr.includes('generation.json'))
+    assert.equal(await readFile(join(profile, 'package.json'), 'utf8'), oldManifest)
+    assert.equal(await readlink(join(profile, 'node_modules', PACKAGE)), oldSource)
+    assert.equal(await readFile(join(profile, 'model-sync', 'state.json'), 'utf8'), '{"version":0}')
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})

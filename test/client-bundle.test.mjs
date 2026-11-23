@@ -405,3 +405,69 @@ test('a route nothing knows how to reach is described in words, not painted red'
   assert.ok(text.includes('维护与诊断'), 'details remain accessible')
   assert.ok(text.includes('已显示 2 / 2 个'), 'the configured models still render')
 })
+
+
+test('v3.1.2 review rows keep identity, current status and evidence status in three lines', async () => {
+  const { registered } = await loadClient()
+  const reviewReact = {
+    ...REACT_STUB,
+    useState: (value) => {
+      const initial = typeof value === 'function' ? value() : value
+      return [initial === 'manage' ? 'metadata' : initial, () => undefined]
+    },
+  }
+  const module = registered[0].factory(() => reviewReact)
+  let Panel
+  module.apply({
+    slots: {
+      inject: (name, factory) => factory(),
+      register: (options, component) => { Panel = component; return () => undefined },
+    },
+  })
+  const model = {
+    provider: 'openrouter', routeKey: 'openrouter', id: 'anthropic/claude-haiku-4.5',
+    displayName: 'OpenRouter', name: 'Claude Haiku 4.5', level: 'partial', pending: true,
+    edited: false, canWrite: true, canRevert: false, revision: 1, reviewRevision: 0,
+    updatedAt: 1, protocol: 'openai-completions', fingerprint: 'fingerprint',
+    issues: [{ kind: 'missing', field: 'maxTokens' }],
+    fields: {
+      contextWindow: { value: 200000, source: 'official', candidate: 200000, candidateSource: 'official' },
+      maxTokens: { value: 64000, source: 'models.dev', candidate: 64000, candidateSource: 'models.dev' },
+      input: { value: ['text'], source: 'user' },
+      reasoningEfforts: { value: {}, source: 'host' },
+    },
+  }
+  const tree = Panel({
+    view: {
+      providers: [], problems: [], legacy: [], schedule: { enabled: false, hour: 9 },
+      review: { pendingCount: 1, models: [model], history: [] },
+    },
+  })
+  const text = textOf(tree)
+  for (const expected of [
+    'Claude Haiku 4.5', 'anthropic/claude-haiku-4.5', 'OpenRouter', '缺字段', '部分核实',
+    '官方 API', 'models.dev 精准匹配', '人工填写', '本机已确认', 'DSH 内置目录', 'models.dev 泛化',
+    '所需字段仍未确认；未知值保持空白，不猜测。',
+  ]) assert.ok(text.includes(expected), `the review panel must render "${expected}"`)
+
+  let row
+  walk(tree, (node) => { if (node.props?.className === 'review-model') row = node })
+  assert.ok(row, 'the compact review row exists')
+  assert.equal(row.children.length, 3, 'name/status, id and provider/evidence are exactly three rows')
+  assert.match(row.props['aria-label'], /当前状态：缺字段，信息状态：部分核实/)
+  const source = await readFile(SOURCE, 'utf8')
+  assert.ok(source.includes('height:61px; display:grid; grid-template-rows:16px 12px 19px'), 'the compact row keeps its 61 px budget')
+  assert.ok(source.includes("['none','正常（无当前问题）']"), 'normal models can be filtered explicitly')
+})
+
+test('v3.1.2 keeps the original blue-and-white management dimensions', async () => {
+  const source = await readFile(SOURCE, 'utf8')
+  for (const invariant of [
+    '--ms-blue:#376bda',
+    '.dsh-ms .proxy { height:60px;',
+    '.dsh-ms .toolbar { height:33px;',
+    '.dsh-ms .provider-head { width:100%; height:42px;',
+    '.dsh-ms .groups.single { display:grid; grid-template-columns:repeat(2,minmax(0,1fr));',
+    'height:40px; margin:0 8px; border-top:1px solid var(--ms-line);',
+  ]) assert.ok(source.includes(invariant), `the original management invariant remains: ${invariant}`)
+})
