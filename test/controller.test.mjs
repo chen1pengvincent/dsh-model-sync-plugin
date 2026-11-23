@@ -174,6 +174,98 @@ test('removal-only does not need a check and preserves unchanged model metadata'
   }
 })
 
+test('model review separates route identity, evidence, pending and user decisions', async () => {
+  const id = 'shared-model'
+  const model = { id, contextWindow: 10000, maxTokens: 5000, input: ['text'] }
+  const { controller, dir } = await controllerFor({ googleModels: [model], extraProviders: { other: { models: [{ id }] } } })
+  try {
+    controller.store.data.checks = {
+      google: { status: 'ok', at: 1, catalog: [model], reviewFacts: { [id]: { ...model, maxTokens: 6000 } } },
+      other: { status: 'ok', at: 1, catalog: [{ id }], reviewFacts: { [id]: { ...model } } },
+    }
+    const view = () => controller.view().then(({ review }) => review)
+    const before = (await view()).models.filter((row) => row.id === id)
+    assert.equal(before.length, 2)
+    assert.equal(before[0].level, 'unverified')
+    assert.equal(before[0].pending, true)
+    assert.equal(before[1].level, 'official')
+    assert.equal(before[1].pending, false)
+    await controller.saveReview({ ...before[0], decision: 'ignore' })
+    const after = (await view()).models.find((row) => row.provider === 'google')
+    assert.equal(after.level, 'unverified')
+    assert.equal(after.pending, false)
+    controller.store.data.checks.google.reviewFacts[id].maxTokens = 7000
+    assert.equal((await view()).models.find((row) => row.provider === 'google').pending, true)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('refreshing legacy review evidence recognizes complete provider facts without changing settings', async () => {
+  const listed = { id: 'full', contextWindow: 10000, maxTokens: 4000, input: ['text'] }
+  const omitted = { id: 'missing-input', contextWindow: 10000, maxTokens: 4000 }
+  const { controller, dir, writes } = await controllerFor({ googleModels: [{ id: listed.id }, { id: omitted.id }] })
+  try {
+    const summary = { at: Date.now() }
+    controller.store.data.summary = summary
+    controller.store.data.checks = {
+      google: { status: 'ok', at: summary.at, catalog: [listed, { ...omitted, input: ['text'] }] },
+    }
+    controller.list = async () => ({ models: [listed, omitted], api: 'google-generative-ai', via: 'direct' })
+    controller.nativeCatalog = async () => [{ id: omitted.id, input: ['text'] }]
+    const options = { reason: 'boot', evidenceOnly: true }
+
+    assert.equal((await controller.view()).review.models.some((model) => model.level === 'official'), false)
+    assert.equal((await controller.check(options)).results.length, 1)
+    const { review } = await controller.view()
+    assert.equal(review.models.find(({ id }) => id === listed.id).level, 'official')
+    assert.equal(review.models.find(({ id }) => id === omitted.id).level, 'partial')
+    assert.equal((await controller.check(options)).results.length, 0)
+    assert.deepEqual(writes, [])
+    assert.deepEqual(controller.store.data.summary, summary)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('review saves a model in one write, records five modalities and preserves the host schema', async () => {
+  const model = { id: 'model-one', contextWindow: 10000, maxTokens: 4000, input: ['text'] }
+  const { controller, document, dir, writes } = await controllerFor({ googleModels: [model, { id: 'neighbor' }] })
+  try {
+    const { review } = await controller.view()
+    const before = review.models.find((row) => row.id === model.id)
+    const input = ['text', 'image', 'audio', 'video', 'pdf']
+    const changes = { maxTokens: { value: 6000 }, input: { value: input } }
+    const saved = await controller.saveReview({ ...before, changes })
+    assert.equal(writes.length, 1)
+    assert.deepEqual(writes[0].ops[0].path, ['providers', 'google', 'models'])
+    assert.deepEqual(document[PIAI].providers.google.models, [{ ...model, maxTokens: 6000, input: ['text', 'image'] }, { id: 'neighbor' }])
+    assert.deepEqual(saved.review.models.find((row) => row.id === model.id).fields.input.value, input)
+    assert.deepEqual(saved.review.history.find((row) => row.field === 'input').to, input)
+    await assert.rejects(() => controller.saveReview({ ...before, changes }), /已变化/)
+    const after = saved.review.models.find((row) => row.id === model.id)
+    await assert.rejects(() => controller.saveReview({ ...after, changes: { input: { value: ['unknown'] } } }), /请检查/)
+    assert.equal(writes.length, 1)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('review restores only its model-list revision when the ledger cannot be saved', async () => {
+  const model = { id: 'model-one', contextWindow: 10000, maxTokens: 4000 }
+  const { controller, document, dir, writes } = await controllerFor({ googleModels: [model] })
+  try {
+    const before = (await controller.view()).review.models.find((row) => row.id === model.id)
+    controller.store.save = async () => { throw new Error('disk full') }
+    await assert.rejects(() => controller.saveReview({ ...before, changes: { maxTokens: { value: 5000 } } }), /disk full/)
+    assert.deepEqual(document[PIAI].providers.google.models, [model])
+    assert.equal(writes.length, 2)
+    assert.equal((await controller.view()).review.history.some((row) => row.model === model.id), false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('one picker save registers a new model and hides an existing model without deleting it', async () => {
   const keep = { id: 'gemini-4-argon', name: 'Argon', contextWindow: 12345 }
   const newId = 'gemini-4-neon'
