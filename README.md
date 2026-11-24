@@ -2,7 +2,7 @@
 
 在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的「设置 → 模型管理」里检查供应商目录、选择对话可见模型、核对模型参数。这是第三方插件，只管理你已经配置的供应商。模型显示和隐藏以你保存的选择为准。上游下架的模型会提示核对，已有配置会保留。
 
-[下载 v3.1.2](https://github.com/chen1pengvincent/dsh-model-sync-plugin/releases/tag/v3.1.2) · [版本记录](CHANGELOG.md)
+[下载 v3.1.3](https://github.com/chen1pengvincent/dsh-model-sync-plugin/releases/tag/v3.1.3) · [版本记录](CHANGELOG.md)
 
 ## 安装或升级
 
@@ -11,7 +11,7 @@ macOS 上需要 Node.js。插件声明的 DSH 内核兼容范围为 `>=0.2.2-rc.
 退出 DSH，将源码放在长期保留的位置。安装通过本地链接加载源码。
 
 ~~~sh
-git clone --branch v3.1.2 https://github.com/chen1pengvincent/dsh-model-sync-plugin.git
+git clone --branch v3.1.3 https://github.com/chen1pengvincent/dsh-model-sync-plugin.git
 cd dsh-model-sync-plugin
 node scripts/install.mjs --profile desktop
 node scripts/install.mjs --profile desktop --apply

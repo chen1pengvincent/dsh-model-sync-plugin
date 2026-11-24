@@ -69,17 +69,11 @@ controller.apply()
 
 ### 2.3 代理声明：只碰自己的键
 
-```
-系统代理存在？ ──no──→ 什么都不做（并且撤销上次写的）
-   │yes
-locate()  → proxy-origin 验 pid → 回落 port-zone.json
-   │
-需要代理的主机 = 已配置路由的 baseURL 主机 ∩ {google, openai, anthropic}
-   │
-planProviders(config, hosts, proxy)  ← 纯函数：只算 providers 表，其余键原样带回
-   │
-备份 → PUT /__bili/config {providers} → 回读校验 proxy === url → 记账（首条优先）
-```
+已配置路由的上游主机与受管清单取交集。共享锁串行化 desktop 和 web 的出网对账。系统代理通过探测后才写入。确认受管声明失效时，插件备份、撤销并回读核对。不可达的手工声明在「网络出口详情」中告警，原配置会保留。
+
+bili 的熔断按上游地址记录。连续三次响应前失败后，首轮冷却为 60 秒。代理声明的撤销或恢复不会清除这段状态。冷却结束后 bili 才允许重试，重试再次失败会进入下一轮。当前 bili 版本未提供手动重置熔断的接口。
+
+生产环境默认在 `~/.dsh/model-sync/` 中存放共享出网账本和锁。测试用 `DSH_MODEL_SYNC_EGRESS_DIR` 将两者一起隔离到临时目录。
 
 为什么不能用 `fetch` 或 `node:http`：本机 `NODE_USE_ENV_PROXY=1` 会劫持 `http.request`（CONNECT 会挂住 60 秒），而 `fetch` 会被别的插件改写成回环地址。所以 `lib/http.js` 自己写 socket：HTTP 代理用 CONNECT 隧道、SOCKS 明确拒绝（不静默直连）、响应头有字节上限（64 KiB）、SSE 按三种框架（`content-length` / `chunked` / 读到关闭）流式读出。
 

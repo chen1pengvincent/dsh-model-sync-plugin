@@ -403,6 +403,7 @@ async function controllerFor(options = {}) {
   // another plugin's config. `locate` returning undefined is the honest fake.
   const controller = new Controller(fake.ctx, {
     dir,
+    egress: { dir },
     logger: fake.ctx.logger,
     bili: options.bili ?? { locate: () => undefined },
   })

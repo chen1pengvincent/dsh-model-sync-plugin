@@ -58,7 +58,7 @@ async function controllerWith(script, options = {}) {
     },
     logger: { warn() {}, info() {}, error() {} },
   }
-  const controller = new Controller(ctx, { dir, logger: ctx.logger, list: script })
+  const controller = new Controller(ctx, { dir, logger: ctx.logger, list: script, egress: { dir }, bili: { locate: () => undefined } })
   await controller.store.load()
   return { controller, document, dir }
 }

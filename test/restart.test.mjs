@@ -108,6 +108,7 @@ async function boot(state) {
   const { ctx } = host(state)
   const controller = new Controller(ctx, {
     dir: state.dir,
+    egress: { dir: state.dir },
     logger: ctx.logger,
     // Never the network: the listing is the one external call a check makes.
     list: async () => ({ api: 'google-generative-ai', via: 'direct', models: state.upstream.map((id) => ({ id })) }),

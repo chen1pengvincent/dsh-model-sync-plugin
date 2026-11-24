@@ -14,8 +14,8 @@
 
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdtemp, stat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
@@ -194,6 +194,7 @@ async function controllerFor(lane, options = {}) {
     dir,
     logger: { warn() {}, info() {}, error() {} },
     bili: lane,
+    egress: { dir, probe: async () => ({ ok: true, reachable: true, reason: 'ok' }) },
     proxyWatcher: (options.proxyWatcher ?? withProxy)(),
   })
   await controller.store.load()
@@ -221,7 +222,7 @@ test('turning the switch off takes the entries back out', async () => {
     await controller.syncBili({ reason: 'test' })
     assert.equal(controller.store.data.bili.written.length, 1)
     const off = await controller.settings({ bili: { enabled: false } })
-    assert.equal(off.bili.status, 'revoked')
+    assert.equal(off.bili.status, 'disabled')
     assert.deepEqual(lane.config.providers, {})
     assert.equal(controller.store.data.bili.written.length, 0)
   } finally {
@@ -309,7 +310,7 @@ test('a rejected payload is reported and is not recorded as written', async () =
   try {
     const result = await controller.syncBili({})
     assert.equal(result.status, 'rejected')
-    assert.match(result.error, /invalid per-URL upstream proxy/)
+    assert.match(result.error, /bili refused the config \(400\)/)
     // `emptyState` now declares an empty `written` list up front, so "nothing
     // recorded" means an empty list rather than an absent field.
     assert.deepEqual(controller.store.data.bili?.written ?? [], [])
@@ -327,6 +328,8 @@ test('revoking removes only the keys this plugin created', async () => {
     // Pretend the user set OpenAI up themselves before the sync.
     const result = await controller.revokeBili()
     assert.equal(result.status, 'revoked')
+    assert.equal(result.phase, 'revoked')
+    assert.equal(controller.store.data.bili.phase, 'revoked')
     const final = lane.config.providers
     assert.equal(final['https://generativelanguage.googleapis.com'], undefined, 'created key removed')
     assert.deepEqual(final['https://api.openai.com'], { proxy: 'http://user:9', models: { a: 1 } }, 'user entry intact')
@@ -344,7 +347,7 @@ test('state survives a reload and never contains the proxy credential', async ()
     const raw = await readFile(join(controller.store.dir, 'state.json'), 'utf8')
     assert.ok(raw.includes('generativelanguage'), 'the written key is remembered')
     assert.ok(!raw.includes('SECRET'), 'no credential is persisted')
-    const again = new Controller(harness(dir), { dir: controller.store.dir, logger: controller.logger, bili: lane, proxyWatcher: withProxy() })
+    const again = new Controller(harness(dir), { dir: controller.store.dir, logger: controller.logger, bili: lane, egress: { dir }, proxyWatcher: withProxy() })
     await again.store.load()
     assert.equal(again.store.data.bili.written.length, 1)
   } finally {
@@ -361,14 +364,14 @@ test('putConfig sends a PUT to the lane over a raw socket', async () => {
   await assert.rejects(() => getConfig('http://127.0.0.1:1', { timeoutMs: 1_000 }))
 })
 
-test('the plan is rebuilt from the table bili has right now, not from the first read', async () => {
+test('a concurrent edit aborts the transaction and the next sync reads the fresh table', async () => {
   // bili rewrites this file from its own settings UI, and the PUT replaces the
   // whole `providers` table. If the plugin planned from an older read it would
   // write that older table back — silently undoing an edit made in between.
   const lane = fakeLane()
   let reads = 0
-  const original = lane.readConfigStrict
-  lane.readConfigStrict = async () => {
+  const original = lane.getConfig
+  lane.getConfig = async () => {
     reads += 1
     // Only the *second* read sees the entry bili added in the meantime.
     if (reads === 2) lane.config.providers['https://api.anthropic.com'] = { proxy: 'http://127.0.0.1:7899' }
@@ -378,6 +381,9 @@ test('the plan is rebuilt from the table bili has right now, not from the first 
   const watcher = new ProxyWatcher({ platform: 'linux', env })
   const { controller, dir } = await controllerFor(lane, { proxyWatcher: () => watcher })
   try {
+    const conflict = await controller.syncBili({ reason: 'manual' })
+    assert.equal(conflict.phase, 'conflict')
+    assert.equal(lane.puts.length, 0)
     const result = await controller.syncBili({ reason: 'manual' })
     assert.equal(result.status, 'applied')
     const sent = lane.puts.at(-1).providers
@@ -407,7 +413,7 @@ test('a second sync keeps the first record, so turning the switch off still dele
     assert.equal(controller.store.data.bili.written[0].created, true, 'the original record wins')
 
     const off = await controller.settings({ bili: { enabled: false } })
-    assert.equal(off.bili.status, 'revoked')
+    assert.equal(off.bili.status, 'disabled')
     assert.deepEqual(lane.config.providers, {}, 'the entry this plugin created has to be gone')
   } finally {
     await rm(dir, { recursive: true, force: true })
@@ -416,7 +422,7 @@ test('a second sync keeps the first record, so turning the switch off still dele
 
 test('a lane config that cannot be read is never written over', async () => {
   const lane = fakeLane()
-  lane.readConfigStrict = async () => { throw new BiliConfigError('bili 配置解析失败，没有写入：bad') }
+  lane.getConfig = async () => ({ status: 200, text: JSON.stringify({ providers: {}, parseError: 'bad' }) })
   const { controller, dir } = await controllerFor(lane)
   try {
     const done = await controller.syncBili({ reason: 'test' })
@@ -511,4 +517,36 @@ test('an existing entry spelled with a port is reused, not duplicated', () => {
   const plan = planProviders(config, ['api.openai.com'], PROXY)
   assert.deepEqual(Object.keys(plan.next.providers), ['https://API.openai.com:443'])
   assert.deepEqual(plan.unchanged, ['https://API.openai.com:443'])
+})
+
+
+test('DSH_MODEL_SYNC_EGRESS_DIR isolates journal writes from the real egress directory', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'model-sync-egress-env-'))
+  const journalDir = join(dir, 'egress')
+  const previous = process.env.DSH_MODEL_SYNC_EGRESS_DIR
+  process.env.DSH_MODEL_SYNC_EGRESS_DIR = journalDir
+  t.after(async () => {
+    if (previous === undefined) delete process.env.DSH_MODEL_SYNC_EGRESS_DIR
+    else process.env.DSH_MODEL_SYNC_EGRESS_DIR = previous
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  const liveJournal = join(homedir(), '.dsh', 'model-sync', 'egress.json')
+  const modificationTime = async () => stat(liveJournal).then(({ mtimeMs }) => mtimeMs, (error) => {
+    if (error.code === 'ENOENT') return undefined
+    throw error
+  })
+  const before = await modificationTime()
+  const lane = fakeLane()
+  const controller = new Controller(harness(dir), {
+    dir,
+    proxyWatcher: withProxy(),
+    bili: lane,
+    egress: { probe: async () => ({ ok: true, reachable: true, reason: 'ok' }) },
+  })
+  await controller.store.load()
+  assert.equal((await controller.syncBili()).status, 'applied')
+  const journal = JSON.parse(await readFile(join(journalDir, 'egress.json'), 'utf8'))
+  assert.ok(journal.lanes['lane:/tmp/x.json'])
+  assert.equal(await modificationTime(), before)
 })

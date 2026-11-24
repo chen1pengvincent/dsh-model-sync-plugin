@@ -167,6 +167,7 @@ async function controllerFor(options = {}) {
   const probe = fakeListAll(options.probe)
   const controller = new Controller(fake.ctx, {
     dir,
+    egress: { dir },
     logger: fake.ctx.logger,
     // No live lane, no network, no socket.
     bili: { locate: () => undefined },
@@ -729,6 +730,7 @@ test('the gateway re-reads the machine proxy, so turning it on later moves egres
   const dir = await mkdtemp(join(tmpdir(), 'model-sync-gw-exit-'))
   /** @type {string | undefined} */
   let url
+  let reachable = true
   const proxyWatcher = { current: async () => ({ url, source: 'test', detail: 'stub' }) }
   const fake = harness({ profileDir: dir })
   const gateway = fakeGateway()
@@ -739,6 +741,7 @@ test('the gateway re-reads the machine proxy, so turning it on later moves egres
     gateway,
     listAll: fakeListAll().listAll,
     proxyWatcher,
+    egress: { dir, probe: async () => ({ reachable, ok: reachable, reason: reachable ? 'ok' : 'refused' }) },
   })
   await controller.store.load()
   try {
@@ -749,6 +752,15 @@ test('the gateway re-reads the machine proxy, so turning it on later moves egres
     url = 'http://127.0.0.1:7897'
     await controller.refreshExit()
     assert.equal(controller.proxyForHost('api.openai.com'), 'http://127.0.0.1:7897')
+
+    reachable = false
+    await controller.refreshExit()
+    assert.equal(controller.proxyForHost('api.openai.com'), undefined)
+    await controller.view()
+    assert.equal(controller.proxyForHost('api.openai.com'), undefined, 'the panel does not overwrite the probed exit')
+    reachable = true
+    await controller.refreshExit()
+    assert.equal(controller.proxyForHost('api.openai.com'), url)
 
     // Reference directories still go direct: tunnelling to loopback through a
     // proxy only spends the timeout budget.

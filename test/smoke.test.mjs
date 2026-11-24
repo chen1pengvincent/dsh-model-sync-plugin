@@ -14,9 +14,23 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import test from 'node:test'
+import test, { beforeEach } from 'node:test'
 
 import * as entry from '../lib/index.js'
+
+beforeEach(async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'model-sync-test-egress-'))
+  const variables = { DSH_MODEL_SYNC_EGRESS_DIR: dir, XDG_STATE_HOME: dir }
+  const previous = Object.fromEntries(Object.keys(variables).map((name) => [name, process.env[name]]))
+  Object.assign(process.env, variables)
+  t.after(async () => {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    await rm(dir, { recursive: true, force: true })
+  })
+})
 
 const PIAI = 'llm-pi-ai'
 const DEEPSEEK = 'llm-deepseek'
@@ -133,7 +147,7 @@ test('the host half activates and answers GET view', async () => {
   assert.deepEqual(view.foreign, ['opencode-go-chat'], 'the leftover key is reported, not touched')
   assert.ok(!JSON.stringify(view).includes('not-a-real-key'), 'no credential may reach the panel')
 
-  for (const dispose of disposers) dispose()
+  for (const dispose of disposers) await dispose?.()
   await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 })
 })
 
@@ -151,13 +165,13 @@ test('an unknown verb is a 404 and a write verb is refused without a body', asyn
   await routes[0].handler(fakeRequest({ url: '/model-sync/api/check', method: 'GET' }), wrongMethod)
   assert.equal(wrongMethod.status, 405)
 
-  for (const dispose of disposers) dispose()
+  for (const dispose of disposers) await dispose?.()
   await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 })
 })
 
 test('a broken service does not throw out of apply, and leaves a note behind', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'model-sync-smoke-'))
-  const { ctx } = fakeContext(dir)
+  const { ctx, disposers } = fakeContext(dir)
   // A harness without the services this plugin needs must not take the host
   // down: activation is silent by design, so the note on disk is the only trace.
   // DSH_HOME is redirected so the failure note lands in the temp directory.
@@ -170,6 +184,7 @@ test('a broken service does not throw out of apply, and leaves a note behind', a
     const note = await readFile(join(dir, 'model-sync', 'activation-error.txt'), 'utf8')
     assert.match(note, /register/)
   } finally {
+    for (const dispose of disposers) await dispose?.()
     if (previous === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previous
     await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 })
@@ -189,13 +204,13 @@ test('a note from a previous session is cleared once this one mounts its route',
   // panel (and `scripts/verify.mjs`) report a failure that no longer exists.
   await assert.rejects(readFile(join(stateDir, 'activation-error.txt'), 'utf8'), /ENOENT/)
 
-  for (const dispose of disposers) dispose()
+  for (const dispose of disposers) await dispose?.()
   await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 })
 })
 
 test('a route that cannot be mounted is recorded rather than silently missing', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'model-sync-smoke-'))
-  const { ctx } = fakeContext(dir)
+  const { ctx, disposers } = fakeContext(dir)
   // The shape of a hot reload that kept the old registration: whatever the
   // reason, the panel is about to be missing, and the reason has to be findable.
   ctx.inject = (_deps, callback) => callback({
@@ -206,5 +221,6 @@ test('a route that cannot be mounted is recorded rather than silently missing', 
   assert.doesNotThrow(() => entry.apply(ctx))
   const note = await readFile(join(dir, 'model-sync', 'activation-error.txt'), 'utf8')
   assert.match(note, /duplicate prefix route/)
+  for (const dispose of disposers) await dispose?.()
   await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 })
 })

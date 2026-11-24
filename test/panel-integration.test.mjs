@@ -14,10 +14,24 @@ import { readFile } from 'node:fs/promises'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import test from 'node:test'
+import test, { beforeEach } from 'node:test'
 import vm from 'node:vm'
 
 import * as entry from '../lib/index.js'
+
+beforeEach(async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'model-sync-test-egress-'))
+  const variables = { DSH_MODEL_SYNC_EGRESS_DIR: dir, XDG_STATE_HOME: dir }
+  const previous = Object.fromEntries(Object.keys(variables).map((name) => [name, process.env[name]]))
+  Object.assign(process.env, variables)
+  t.after(async () => {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    await rm(dir, { recursive: true, force: true })
+  })
+})
 
 const CLIENT = new URL('../lib/client.js', import.meta.url)
 const PIAI = 'llm-pi-ai'
@@ -56,6 +70,7 @@ function fakeContext(dir) {
     },
   }
   const routes = []
+  const disposers = []
   const services = {
     settings: {
       describe: () => Object.entries(document).map(([ns, value]) => ({ ns, value: structuredClone(value), revision: 1 })),
@@ -82,15 +97,14 @@ function fakeContext(dir) {
     get: (name) => services[name],
     effect(execute) {
       const disposer = execute()
-      return () => {
-        try { disposer?.() } catch {}
-      }
+      disposers.push(disposer)
+      return disposer
     },
     inject(_deps, callback) {
       return callback({ ...ctx, webServer: services.webServer })
     },
   }
-  return { ctx, routes, document }
+  return { ctx, routes, document, disposers }
 }
 
 function fakeResponse() {
@@ -107,7 +121,7 @@ function fakeRequest({ url, method }) {
   return { url, method, headers: {}, async *[Symbol.asyncIterator]() {} }
 }
 
-async function loadPanel() {
+async function loadPanel({ interactive = false } = {}) {
   const source = await readFile(CLIENT, 'utf8')
   const registered = []
   const context = {
@@ -120,7 +134,19 @@ async function loadPanel() {
   vm.createContext(context)
   vm.runInContext(source, context, { filename: 'client.js' })
   assert.equal(registered.length, 1)
-  const module = registered[0].factory(() => REACT_STUB)
+  let cursor = 0
+  const state = []
+  const react = {
+    ...REACT_STUB,
+    useState(initial) {
+      const index = cursor++
+      if (!(index in state)) state[index] = typeof initial === 'function' ? initial() : initial
+      return [state[index], (value) => {
+        state[index] = typeof value === 'function' ? value(state[index]) : value
+      }]
+    },
+  }
+  const module = registered[0].factory(() => interactive ? react : REACT_STUB)
   let Panel
   module.apply({
     slots: {
@@ -128,12 +154,15 @@ async function loadPanel() {
       register: (options, component) => { Panel = component; return () => undefined },
     },
   })
-  return Panel
+  return (props) => {
+    cursor = 0
+    return Panel(props)
+  }
 }
 
 test('the real view payload renders in the real panel', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'model-sync-panel-'))
-  const { ctx, routes } = fakeContext(dir)
+  const { ctx, routes, disposers } = fakeContext(dir)
   entry.apply(ctx)
   assert.equal(routes.length, 1, 'the plugin must mount its route before the view exists')
 
@@ -198,5 +227,32 @@ test('the real view payload renders in the real panel', async () => {
   assert.equal(verdictBody.view.selfCheck.ok, judged.ok)
   assert.equal(verdictBody.view.selfCheck.text, text)
 
+  for (const dispose of disposers) await dispose?.()
   await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 })
+})
+
+test('network details display the unreachable warning and circuit cooldown', async () => {
+  const render = await loadPanel({ interactive: true })
+  const warning = 'bili 有 1 条现有代理声明未通过探测，这些声明未改动。'
+  const props = { view: { bili: { enabled: true, warning }, providers: [] } }
+  function networkButton(node) {
+    if (!node || typeof node !== 'object') return undefined
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        const match = networkButton(child)
+        if (match) return match
+      }
+      return undefined
+    }
+    if (node.props?.['aria-controls'] === 'dsh-ms-details' && textOf(node) === '网络出口详情') return node
+    return networkButton(node.children)
+  }
+  const trigger = networkButton(render(props))
+  assert.ok(trigger)
+  trigger.props.onClick({ currentTarget: {} })
+  const details = textOf(render(props))
+  assert.match(details, /这些声明未改动/)
+  assert.match(details, /首轮冷却为 60 秒/)
+  props.view.bili.warning = undefined
+  assert.doesNotMatch(textOf(render(props)), /这些声明未改动/)
 })
