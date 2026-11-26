@@ -136,6 +136,55 @@ function initialState(dir) {
   }
 }
 
+test('unload cancels an in-flight provider check and waits for it to finish', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'model-sync-check-dispose-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const state = initialState(dir)
+  const controller = await boot(state)
+  const entered = Promise.withResolvers()
+  const release = Promise.withResolvers()
+  controller.list = async ({ signal }) => {
+    entered.resolve(signal)
+    await release.promise
+    return { api: 'google-generative-ai', models: [{ id: 'gemini-4-argon', maxTokens: 500 }] }
+  }
+  const check = controller.check({ reason: 'schedule' })
+  const signal = await entered.promise
+  let disposed = false
+  const disposing = controller.dispose().then(() => { disposed = true })
+  await new Promise((resolve) => setImmediate(resolve))
+  const finishedEarly = disposed
+  release.resolve()
+  const [completed] = await Promise.allSettled([check, disposing])
+  assert.ok(signal?.aborted)
+  assert.equal(finishedEarly, false)
+  assert.equal(completed.status, 'rejected')
+  assert.deepEqual(state.writes, [])
+  assert.deepEqual(controller.store.data.checks, {})
+  assert.equal(controller.store.data.summary, undefined)
+})
+
+test('disposal while taking the autofill snapshot prevents a late host write', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'model-sync-snapshot-dispose-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const state = initialState(dir)
+  const controller = await boot(state)
+  controller.list = async () => ({ api: 'google-generative-ai', models: [{ id: 'gemini-4-argon', maxTokens: 500 }] })
+  const entered = Promise.withResolvers()
+  const resume = Promise.withResolvers()
+  controller.snapshotMetadata = async () => {
+    entered.resolve()
+    await resume.promise
+  }
+  const check = controller.check()
+  await entered.promise
+  const disposing = controller.dispose()
+  resume.resolve()
+  await assert.rejects(check, { name: 'AbortError' })
+  await disposing
+  assert.deepEqual(state.writes, [])
+})
+
 test('self-check reads diagnostics without projecting sessions or building panel rows', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'model-sync-diagnostics-'))
   t.after(() => rm(dir, { recursive: true, force: true }))

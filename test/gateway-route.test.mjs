@@ -38,7 +38,7 @@ function fakeGateway(options = {}) {
         return port === 0 ? undefined : `http://127.0.0.1:${port}`
       },
       async start(preferredPort = 0, forbidden = []) {
-        const next = preferredPort !== 0 ? preferredPort : (options.port ?? 41234)
+        const next = options.reassignedPort ?? (preferredPort !== 0 ? preferredPort : (options.port ?? 41234))
         if (forbidden.includes(next)) throw new Error(`port ${next} is reserved`)
         port = next
       },
@@ -214,6 +214,53 @@ test('a settings write that took effect before its reply failed keeps the active
   assert.ok(controller.store.data.gateway.entries.google)
 })
 
+test('undo recognizes a committed host write whose acknowledgement was lost', async (t) => {
+  const { ctx, controller, document, dir } = await controllerFor()
+  t.after(async () => { await controller.dispose(); await rm(dir, { recursive: true, force: true }) })
+  await controller.routeGateway({ provider: 'google' })
+  const settings = ctx.get('settings')
+  const mutate = settings.mutate.bind(settings)
+  settings.mutate = async (...args) => {
+    await mutate(...args)
+    throw new Error('acknowledgement lost')
+  }
+  await controller.unrouteGateway({ provider: 'google' })
+  assert.equal(document[PIAI].providers.google.baseURL, GOOGLE_BASE)
+  assert.deepEqual(controller.store.data.gateway.entries, {})
+  assert.equal(controller.gatewayHandle, undefined)
+})
+
+test('boot clears an already restored route after the final ledger save failed', async (t) => {
+  const { controller, document, writes, dir } = await controllerFor()
+  t.after(async () => { await controller.dispose(); await rm(dir, { recursive: true, force: true }) })
+  await controller.routeGateway({ provider: 'google' })
+  const save = controller.store.save.bind(controller.store)
+  controller.store.save = async () => { throw new Error('disk full') }
+  await assert.rejects(controller.unrouteGateway({ provider: 'google' }), /disk full/)
+  assert.equal(document[PIAI].providers.google.baseURL, GOOGLE_BASE)
+  assert.ok(controller.store.data.gateway.entries.google)
+  controller.store.save = save
+  await controller.stopGateway()
+  await controller.store.load()
+  await controller.restoreGateway()
+  assert.equal(controller.gatewayHandle, undefined)
+  assert.deepEqual(controller.store.data.gateway.entries, {})
+  assert.equal(writes.length, 2)
+})
+
+test('a legacy row without port evidence cannot claim an arbitrary loopback service', async (t) => {
+  const { controller, document, writes, dir } = await controllerFor()
+  t.after(async () => { await controller.dispose(); await rm(dir, { recursive: true, force: true }) })
+  controller.store.data.gateway = { entries: { google: { routeId: 'google', previousBaseURL: GOOGLE_BASE } } }
+  const other = 'http://127.0.0.1:42077/g/google'
+  document[PIAI].providers.google.baseURL = other
+  await controller.restoreGateway()
+  await assert.rejects(controller.unrouteGateway({ provider: 'google' }), /no longer points/)
+  await controller.revertRoutedBases('unavailable')
+  assert.equal(document[PIAI].providers.google.baseURL, other)
+  assert.deepEqual(writes, [])
+})
+
 test('undo preserves the protocol edited during a revision conflict', async (t) => {
   const { ctx, controller, document, dir } = await controllerFor({ probe: { attribution: MIXED } })
   t.after(async () => { await controller.dispose(); await rm(dir, { recursive: true, force: true }) })
@@ -225,7 +272,8 @@ test('undo preserves the protocol edited during a revision conflict', async (t) 
   assert.ok(controller.store.data.gateway.entries.google)
   await controller.revertRoutedBases('boot')
   assert.equal(document[PIAI].providers.google.api, 'anthropic-messages')
-  assert.equal(controller.store.data.gateway.status, 'revert-failed')
+  assert.equal(document[PIAI].providers.google.baseURL, GOOGLE_BASE)
+  assert.equal(controller.store.data.gateway.status, 'reverted')
 })
 
 test('boot port repair and rollback only write to matching loopback routes', async (t) => {
@@ -237,7 +285,7 @@ test('boot port repair and rollback only write to matching loopback routes', asy
   for (const provider of ['google', 'other']) {
     assert.equal(document[PIAI].providers[provider].baseURL, `http://127.0.0.1:40000/g/${provider}`)
   }
-  const foreign = 'https://example.com/g/google'
+  const foreign = 'http://127.0.0.1:42077/g/google'
   raceNextWrite(ctx, { op: 'set', path: ['providers', 'google', 'baseURL'], value: foreign })
   await controller.reconcileGatewayPort(41000)
   assert.equal(document[PIAI].providers.google.baseURL, foreign)
@@ -455,13 +503,15 @@ test('the listener never binds the compression lane port', async () => {
 })
 
 test('a route left pointing at the gateway is picked up again on boot', async () => {
-  const { controller, document, dir, gateway } = await controllerFor()
+  const { controller, document, dir } = await controllerFor({ gateway: { port: 40000 } })
   try {
     await controller.routeGateway({ provider: 'google' })
-    // Simulate a restart: the handle is gone, the settings and state survive.
-    controller.gatewayHandle = undefined
-    document[PIAI].providers.google.baseURL = 'http://127.0.0.1:40000/g/google'
-
+    await controller.stopGateway()
+    // v3.1.3 stored the old port on the gateway, without a per-route port.
+    delete controller.store.data.gateway.entries.google.routedPort
+    await controller.store.save()
+    await controller.store.load()
+    controller.gateway = fakeGateway({ reassignedPort: 41234 })
     await controller.restoreGateway()
 
     assert.notEqual(controller.gatewayHandle, undefined)
@@ -469,9 +519,7 @@ test('a route left pointing at the gateway is picked up again on boot', async ()
     // instead of leaving the route pointed at a dead one.
     assert.equal(document[PIAI].providers.google.baseURL, 'http://127.0.0.1:41234/g/google')
     assert.equal(controller.gatewayHandle.port, 41234)
-    // One listener from the routing call, one from the restart: the seam is
-    // re-created because the process's handle does not survive a reload.
-    assert.equal(gateway.created.length, 2)
+    assert.equal(controller.store.data.gateway.entries.google.routedPort, 41234)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -485,6 +533,7 @@ test('if the listener cannot start on boot, the routes are put back rather than 
     // Route it while the lane port is still allowed to be claimed by the fake.
     controller.store.data.gateway = {
       enabled: true,
+      port: 18787,
       entries: {
         google: {
           provider: 'google',
@@ -681,6 +730,9 @@ test('a model added while routed is attributed, remembered, and blocks undo', as
     assert.equal(controller.gatewayRoutesCache.get('google').models.get('brand-new'), 'anthropic-messages')
     assert.deepEqual(controller.store.data.gateway.entries.google.addedAfterRouting, ['brand-new'])
     await assert.rejects(() => controller.unrouteGateway({ provider: 'google' }), /收拢协议之后加进来/)
+    await controller.revertRoutedBases('listener unavailable')
+    assert.equal(controller.store.data.gateway.status, 'revert-failed')
+    assert.ok(controller.store.data.gateway.entries.google)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

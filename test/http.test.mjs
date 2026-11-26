@@ -9,6 +9,7 @@
  */
 
 import assert from 'node:assert/strict'
+import { getEventListeners } from 'node:events'
 import net from 'node:net'
 import { after, before, test } from 'node:test'
 
@@ -96,6 +97,34 @@ function serveOnce(handler) {
     resolve({ server, port })
   }))
 }
+
+test('completed requests and streams release a shared cancellation signal', async () => {
+  const { server, port } = await serveOnce((socket) => {
+    socket.once('data', () => socket.end('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok'))
+  })
+  const { signal } = new AbortController()
+  const options = { url: `http://127.0.0.1:${port}`, signal }
+  try {
+    for (let i = 0; i < 8; i++) {
+      assert.equal((await request(options)).text, 'ok')
+      const reply = await openStream(options)
+      try {
+        const chunks = []
+        for await (const chunk of reply.chunks) chunks.push(chunk)
+        assert.equal(Buffer.concat(chunks).toString(), 'ok')
+      } finally {
+        reply.close()
+      }
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+  // destroy() finishes emitting 'close' on the following event-loop turn.
+  for (let i = 0; i < 10 && getEventListeners(signal, 'abort').length; i++) {
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  assert.equal(getEventListeners(signal, 'abort').length, 0)
+})
 
 for (const phase of ['TCP connect', 'proxy CONNECT', 'TLS handshake', 'response headers']) {
   test(`cancellation during ${phase} reports the transport's AbortedError`, async () => {

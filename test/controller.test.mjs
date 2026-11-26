@@ -291,6 +291,34 @@ test('a skipped provider does not repeat the previous provider’s update count'
   }
 })
 
+test('v1 null ledger slots can be reviewed, and a failed edit restores the exact original slot', async (t) => {
+  // A legitimate model ID can also name an inherited member of a plain object.
+  const id = 'toString'
+  for (const rows of [null, { [id]: null }, {}]) {
+    const { controller, document, dir } = await controllerFor({ googleModels: [{ id }] })
+    t.after(() => rm(dir, { recursive: true, force: true }))
+    const initial = { google: rows }
+    controller.store.data.metadata.records = structuredClone(initial)
+    await controller.store.save()
+    await controller.store.load()
+    assert.ok((await controller.view()).review.models.some((model) => model.id === id))
+
+    const save = controller.store.save.bind(controller.store)
+    controller.store.save = async () => { throw new Error('disk full') }
+    await assert.rejects(controller.updateMetadata({ provider: 'google', id, field: 'contextWindow', value: 4096 }), /disk full/)
+    assert.deepEqual(controller.store.data.metadata.records, initial)
+    assert.deepEqual(document[PIAI].providers.google.models, [{ id }])
+
+    controller.store.save = save
+    const model = (await controller.view()).review.models.find((row) => row.id === id)
+    await controller.saveReview({ ...model, decision: 'ignore' })
+    await controller.store.load()
+    const stored = controller.store.data.metadata.records.google
+    assert.ok(Object.hasOwn(stored, id))
+    assert.equal(stored[id].reviewDecision.action, 'ignore')
+  }
+})
+
 test('automatic metadata rollback leaves later edits intact when the ledger fails', async () => {
   const id = 'sample'
   const { controller, document, settings, dir } = await controllerFor({ googleModels: [{ id, maxTokens: 4000 }] })
