@@ -1,84 +1,147 @@
-# DSH Model Sync
+# dsh-model-sync (`dsh-model-sync-plugin`)
 
-在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的「设置 → 模型管理」里检查供应商目录、选择对话可见模型、核对模型参数。这是第三方插件，只管理你已经配置的供应商。模型显示和隐藏以你保存的选择为准。上游下架的模型会提示核对，已有配置会保留。
+**DeepSeek Harness (DSH) 模型目录自动同步、参数校准与下拉框显示管理插件。**  
+*Auto-discover upstream LLM catalogs, calibrate model metadata (`contextWindow`, `maxTokens`, multimodal inputs, reasoning efforts), and curate which models appear in your DSH chat selector.*
 
-[下载 v3.1.4](https://github.com/chen1pengvincent/dsh-model-sync-plugin/releases/tag/v3.1.4) · [版本记录](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.1.4-blue.svg)](./package.json)
+[![DSH Engine](https://img.shields.io/badge/DSH-%3E%3D0.2.2--rc.1-0f172a.svg)](./package.json)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./package.json)
 
-## 安装或升级
+---
 
-macOS 上需要 Node.js。插件声明的 DSH 内核兼容范围为 `>=0.2.2-rc.1 <0.3.0-0`。对话选择器适配支持 `0.2.2-rc.3` 和 `0.2.2-rc.5`。
+## 🔍 什么时候需要这个插件？（用户与 AI Agent 检索指南）
 
-退出 DSH，将源码放在长期保留的位置。安装通过本地链接加载源码。
+如果你（或你的用户）在 DeepSeek Harness 中遇到以下任一场景，这个插件就是为此设计的：
 
-~~~sh
-git clone --branch v3.1.4 https://github.com/chen1pengvincent/dsh-model-sync-plugin.git
-cd dsh-model-sync-plugin
-node scripts/install.mjs --profile desktop
-node scripts/install.mjs --profile desktop --apply
-~~~
+- **「OpenAI / Claude / Gemini / Kimi / DeepSeek 出新模型了，怎么在 DSH 里用上？」**  
+  自动向已配置供应商的上游接口询问最新模型目录，无需手动翻文档查 Model ID。
+- **「聊天输入框里的模型下拉菜单太长了，怎么隐藏不用的旧模型？」**  
+  提供可视化的勾选面板，勾选哪个模型，对话下拉框就只显示哪个模型。
+- **「为什么这个模型发不了图片 / 上下文被截断 / 没有思考档位（Reasoning Effort）？」**  
+  自动结合**官方 API** 与 **[models.dev](https://models.dev)** 核对每个模型的上下文窗口（`contextWindow`）、最大输出（`maxTokens`）、输入模态（文本/图片/音频/视频/PDF）与推理档位（`low`/`medium`/`high` 等）。
+- **「海外模型（OpenAI / Claude / Gemini）需要走系统代理，国内模型直连，怎么配？」**  
+  内置**系统代理智能分流开关**，只让需要代理的上游域名走本机系统代理，不影响直连厂商。
+- **「供应商只支持某种特定协议（如 OpenAI Responses / Google Gemini / Anthropic），DSH 调用报错怎么办？」**  
+  内置**本机回环协议转换网关**（`127.0.0.1`），在本地自动完成协议适配与模型参数注入。
 
-第一条安装命令预览变更，第二条执行。升级会保留兼容的模型选择、定时设置和同步记录。
+> **🤖 Keywords for AI Agent Discovery (`plugin_market` / Search)**  
+> `dsh-model-sync`, `model catalog sync`, `update model list`, `hide models in selector`, `filter model dropdown`, `contextWindow`, `maxTokens`, `reasoningEfforts`, `multimodal input`, `models.dev`, `system proxy routing`, `local protocol gateway`, `模型同步`, `模型管理`, `更新模型列表`, `隐藏下拉框模型`, `上下文窗口配置`, `系统代理分流`, `协议转换网关`.
 
-首次使用对话模型显示和隐藏功能时，为 Desktop profile 安装原生选择器适配。已有适配的用户可以直接重启 DSH。
+---
 
-~~~sh
-DSH_APP="/Applications/DeepSeek Harness.app"
-ELECTRON_RUN_AS_NODE=1 DSH_ASAR_DIR="$DSH_APP/Contents/Resources/app.asar" \
-  "$DSH_APP/Contents/MacOS/DeepSeek Harness" scripts/selector-overlay.mjs --apply desktop
-~~~
+## 💡 它解决什么痛点？（小白也能看懂的对比）
 
-打开 DSH，进入「设置 → 模型管理」。如果面板提示需要加载选择器适配，检查上一步是否成功，再完全退出并重启 DSH。使用 Web profile 时，将安装命令中的 `desktop` 换成 `web`，并重启该实例。
+| 常见痛点 | 没有插件时的传统做法 | 安装 `dsh-model-sync` 后的体验 |
+| :--- | :--- | :--- |
+| **新模型上线慢** | 手动去官网翻 API 文档、复制一长串模型 ID、手改配置文件，改错一个标点就报错 | 点击 **「检查更新」**（或每天定时自动检查），新模型自动出现在列表中，按需启用 |
+| **下拉菜单太臃肿** | 一个厂商动辄三四十个历史快照模型，全挤在聊天选择框里，找常用模型像大海捞针 | 在 **「模型管理」** 里像列购物清单一样打勾——只把你常用的主力模型留在对话下拉框 |
+| **模型参数拿不准** | 不知道新模型最大支持多少 Token、能不能看图、支持哪些推理档位，只能盲填 | 自动比对**官方接口**与 **models.dev**，发现参数冲突或缺漏时在 **「待确认模型信息」** 高亮提醒，一键采用候选值 |
+| **网络与协议折腾** | 海外接口直连超时，或者厂商接口协议与宿主默认协议不一致导致无法对话 | 一键开启 **「让需要代理的模型走系统代理」**，配合本地回环网关自动搞定协议转换 |
+| **怕改坏本地配置** | 手改 `config.yml` 怕把原有的 API Key 或其他配置冲掉 | **安全铁律**：只更新已配置供应商下的模型清单，**绝不擅自新增供应商键**；每次写入前自动备份快照，随时一键回滚 |
 
-## 日常使用
+---
 
-### 模型管理
+## 📸 功能演示截图
 
-点「检查更新」查看各供应商的上游目录和检查结果。可按供应商或厂商浏览，也可以搜索模型名称、ID 或供应商。勾选后点「保存模型选择」，对话下拉框和 `/model` 才会更新。隐藏模型会保留配置及已有会话。
+### 1. 模型管理与系统代理分流（勾选对话下拉框可见模型）
 
-在「连接设置」里可以调整定时检查。默认每天 09:00 检查一次，并按来源规则补充可确认的字段。
+在 **「模型管理」** 页签中，你可以一眼看到所有已配置的供应商（如 OpenAI、Anthropic、Google、DeepSeek、Moonshot Kimi 等），展开后直接勾选要在聊天输入框下拉菜单里显示的模型，并一键开启系统代理分流：
 
-### 待确认模型信息
+![模型管理与下拉框显示勾选](./docs/ui-manage.jpg)
 
-左侧列表展示模型名称、ID、供应商、当前问题和信息状态。用上方的搜索、筛选和排序定位模型，然后在右侧核对上下文窗口、最大输出、输入模态和推理档位。可用「使用候选值」填写有来源的参数，并在「预览并保存」中核对实际变更。
+### 2. 待确认模型信息（官方 API 与 models.dev 参数核对）
 
-- 「保留我的值」会锁定对应字段。官方值与当前值有差异时，继续提醒你确认更新。
-- 「忽略本次」收起普通提醒。对应上游值变化后会重新提醒，官方值差异会持续显示。
-- 「撤销补全」可撤销符合条件的自动补全字段。
-- 可登记文本、图像、音频、视频和 PDF 五种输入模态。当前 DSH 会话可发送文本和图像。
+当上游或 `models.dev` 的模型参数（上下文窗口、最大输出 Token、支持模态、推理档位）与本机不一致，或新发现的模型缺少关键字段时，插件不会盲目覆盖你的配置，而是放进 **「待确认模型信息」** 供你对比来源并一键确认：
 
-**当前状态**描述缺字段、字段差异或路由问题。**信息状态**描述参数证据的完整程度。官方 API 返回模型 ID，只确认该模型出现在当前路由的目录中。参数需要逐项看来源。
+![待确认模型信息与多源参数对比](./docs/ui-review.jpg)
 
-| 字段来源 | 含义 |
-| --- | --- |
-| 官方 API | 当前供应商路由实际返回的参数 |
-| DSH 内置目录 | 随本机 DSH 安装的模型资料 |
-| models.dev 精准匹配 | 同时匹配供应商与模型 ID 的参数候选 |
-| models.dev 泛化 | 家族等辅助信息，仅用于展示 |
-| 人工填写 | 你在 DSH 设置或复核面板中填写的值 |
+### 3. 同步历史（全链路变更留痕）
 
-旧账本中无法区分历史官方回答与本机资料的值，显示为「本机已确认」。
+所有目录检查结果、新发现的候选模型、自动或人工确认的参数修改，都会在 **「同步历史」** 中按时间轴清晰记录，方便随时回溯：
 
-### 同步历史
+![同步历史记录](./docs/ui-history.jpg)
 
-查看目录检查、发现模型、字段修改、显示选择和人工处理记录。可以从记录跳回仍存在的模型。
+---
 
-## 诊断与回滚
+## ✨ 核心特性与安全边界
 
-- 要查看运行状态，点面板里的「自查」。也可执行 `node scripts/verify.mjs --profile desktop` 检查安装引用和状态文件。
-- 目录外模型需要协议适配时，按供应商在「维护与诊断」中启用协议网关。系统代理声明可在面板里查看或撤销。
-- 从 0.x 升级时，如果出现「待核对的旧版路由」，按[旧版升级说明](docs/upgrading-from-0.x.md)核对归属。
+1. **绝不越界修改供应商配置**：
+   - 插件只读取你已经在 DSH 中配好的 `providers.<route>`，只在该供应商下维护模型目录与可见性，**永远不会偷偷新增未授权的 `providers.*` 条目**。
+   - 你从未交给插件托管的供应商，它的 `models` 字段保持原样不动。
+2. **多源元数据交叉核验（三级可信度）**：
+   - 综合比对**供应商官方 API**、**[models.dev](https://models.dev)** 社区模型库与**本机已确认配置**。
+   - 自动标注可信度（`已核实` / `部分核实` / `字段差异` / `低可信度`），你手工改过并确认的值会被锁定保护，不会被后续自动同步冲掉。
+3. **本机协议转换网关（`127.0.0.1`）**：
+   - 针对需要 `openai-responses`、`google-generative-ai` 等原生协议或特定推理档位参数的路由，在本地回环端口自动完成协议适配，不经过任何第三方中转服务器，API Key 始终只发往你配置的官方/上游地址。
+4. **快照保护与一键回滚**：
+   - 每次写回宿主配置前，自动在 `~/.dsh/model-sync/snapshots/` 保存变更前快照；如遇上游目录异常，可随时在「维护与诊断」中恢复到变更前状态。
 
-需要恢复上一版插件时，先退出 DSH，再预览并执行回滚。
+---
 
-~~~sh
-node scripts/rollback.mjs --profile desktop
-node scripts/rollback.mjs --profile desktop --apply
-~~~
+## 🔌 支持的供应商与上游协议
 
-回滚会恢复安装引用。已保存的模型配置仍在 DSH 设置中，可按需核对 `<profile>/model-sync/snapshots/` 下的写入前快照。
+| 供应商 / 路由类型 | 自动识别条件 | 目录发现与协议方式 |
+| :--- | :--- | :--- |
+| **OpenAI (ChatGPT)** | `provider=openai` 或 `api.openai.com` | `/v1/models` + `openai-responses` 协议探测 |
+| **Anthropic (Claude)** | `api=anthropic-messages` 或 `api.anthropic.com` | `GET /v1/models`（`x-api-key` + `anthropic-version`） |
+| **Google (Gemini)** | `api=google-generative-ai` 或 `googleapis.com` | `GET /v1beta/models`（自动过滤非生成模型并转换 `models/gemini-*`） |
+| **DeepSeek** | `api.deepseek.com`（含 `/anthropic` 兼容路径） | 自动回退至根路径 `GET /models` |
+| **Moonshot (Kimi) / 通义千问 / 智谱 GLM / MiniMax / xAI (Grok)** | 对应官方 Base URL 或 OpenAI/Anthropic 兼容端点 | 标准 `GET /models` + `models.dev` 元数据补全 |
+| **OpenCode Zen / Ollama / 其他兼容网关** | `opencode.ai/zen`、本地 Ollama 或任意 `/v1` 兼容端点 | `GET /models` 目录拉取与本地可见性过滤 |
 
-## 开发
+---
 
-运行 `node --test`。提供已解包的 DSH 载荷时，可设置 `DSH_ASAR_DIR` 运行宿主加载测试。实现细节见[架构说明](docs/architecture.md)。
+## 🚀 安装与快速上手
 
-[MIT 许可证](LICENSE)
+### 安装方式
+
+在 DeepSeek Harness 的插件管理中安装，或通过命令行安装到当前 Profile：
+
+```bash
+# 从 GitHub 仓库直接安装
+dsh plugin add github:chen1pengvincent/dsh-model-sync-plugin
+
+# 或在本地克隆后通过 link 安装
+dsh plugin add --link /path/to/dsh-model-sync-plugin
+```
+
+### 三步上手
+
+1. 打开 DeepSeek Harness **设置 → 模型管理**（插件设置页）。
+2. 如果你使用 OpenAI / Claude / Gemini 等需要代理的服务，打开顶部的 **「让需要代理的模型走系统代理」** 开关，然后点击 **「检查更新」**。
+3. 在各厂商卡片下**勾选你想在聊天框里看到的模型**，点击右下角 **「保存模型选择」**；如果 **「待确认模型信息」** 标签带有数字角标，点进去核对并确认推荐的上下文长度或推理档位即可。
+
+---
+
+## 🏗️ 架构说明与本地开发
+
+在 `v3.1.4` 中，插件完成了全面的模块化运行时重构，将职责拆分为高内聚的独立模块（详见 [`docs/architecture.md`](./docs/architecture.md)）：
+
+- [`lib/index.js`](./lib/index.js)：插件入口、HTTP API 路由挂载与生命周期钩子。
+- [`lib/service.js`](./lib/service.js)：核心同步编排服务（定时调度、上游探测、操作串行化与持久化）。
+- [`lib/gateway.js`](./lib/gateway.js)：本机回环协议转换网关与系统代理探针。
+- [`lib/metadata.js`](./lib/metadata.js)：`models.dev` 缓存拉取、多源参数归一化与冲突检测。
+- [`lib/host-config.js`](./lib/host-config.js)：宿主 `config.yml` / `bili` 代理配置读写与快照回滚。
+- [`lib/view.js`](./lib/view.js)：前端视图状态组装与自检诊断报告生成。
+- [`lib/client.js`](./lib/client.js)：设置页前端 UI 与聊天输入框模型选择器过滤脚本。
+
+### 常用开发与验证命令
+
+```bash
+# 运行完整单元测试与集成测试套件（420+ 测试用例）
+npm test
+
+# 检查本机 DSH Profile 安装状态与启动自检结果（可选）
+npm run verify
+```
+
+---
+
+## 🌐 English Summary
+
+**`dsh-model-sync`** keeps your configured DeepSeek Harness (DSH) model providers in sync with their upstream model catalogs while giving you full control over selector visibility and model metadata:
+
+- **Pain-free Model Discovery**: Polls `/models` across OpenAI, Anthropic, Google Gemini, DeepSeek, Moonshot Kimi, xAI Grok, Qwen, Zhipu, MiniMax, OpenCode, and Ollama without ever adding unauthorized `providers.*` keys.
+- **Clean Chat Model Selector**: Check or uncheck models per provider to keep your chat model dropdown clean and focused.
+- **Multi-Source Metadata Verification**: Cross-checks `contextWindow`, `maxTokens`, multimodal input capabilities, and `reasoningEfforts` between official provider APIs and `models.dev`, highlighting discrepancies in a dedicated **Pending Review** tab.
+- **Smart System Proxy & Local Protocol Gateway**: Routes proxy-required upstream domains through your system proxy while keeping domestic providers direct, and bridges protocol differences via a local `127.0.0.1` loopback gateway.
