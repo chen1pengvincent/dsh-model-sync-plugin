@@ -81,7 +81,7 @@ test('warning-only states keep ok true', () => {
   const verdict = inspectView(view)
   assert.equal(verdict.ok, true)
   const messages = verdict.warnings.map((row) => row.message).join('\n')
-  assert.match(messages, /合成供应商/u)
+  assert.match(messages, /1 条路由的名称符合旧版命名规则.*核对归属和模型配置/u)
   assert.match(messages, /定时检查是关的/u)
   // One warning about not having checked yet would only repeat the timer one.
   assert.doesNotMatch(messages, /还没检查过/u)

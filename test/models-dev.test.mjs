@@ -110,6 +110,18 @@ test('canonical-only information is display-only, never numbers', () => {
   assert.equal(canonicalOnly?.family, 'gemini')
 })
 
+test('canonical fallback keeps the first full and short matches independently', () => {
+  const index = indexModelsDev({
+    a: { models: { x: { family: 'first', canonical_model_id: 'a/same' } } },
+    b: { models: { y: { family: 'second', canonical_model_id: 'b/same' } } },
+    c: { models: { z: { family: 'third', canonical_model_id: 'same' } } },
+  })
+  assert.equal(metadataFor(index, 'other', 'same').family, 'first')
+  assert.equal(metadataFor(index, 'other', 'a/same').family, 'first')
+  assert.equal(metadataFor(index, 'other', 'b/same').family, 'second')
+  assert.equal(metadataFor(index, 'c', 'z').family, 'third')
+})
+
 test('a fresh cache skips the network; force and stale fallback are explicit', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'models-dev-test-'))
   const cachePath = join(dir, 'models.dev.json')
@@ -182,7 +194,9 @@ test('an empty live payload is an error and does not poison a good cache', async
     const { writeModelsDevCache } = await import('../lib/models-dev.js')
     await writeModelsDevCache(cachePath, payload, 1_000)
     const rejected = await loadModelsDev({
-      cachePath, force: true, fetch: async () => ({ status: 200, json: {} }),
+      cachePath, force: true, fetch: async () => ({
+        status: 200, json: { provider: { models: { a: null, b: [], c: 'incomplete' } } },
+      }),
     })
     assert.equal(rejected.fromCache, true)
     assert.equal(rejected.stale, true)
@@ -194,6 +208,7 @@ test('an empty live payload is an error and does not poison a good cache', async
       fetch: async () => { throw new Error('offline') },
     })
     assert.equal(stillGood.fromCache, true)
+    assert.equal(metadataFor(stillGood.index, 'google', 'gemini-x').contextWindow, 100)
     assert.match(stillGood.error, /offline/)
   } finally {
     await rm(dir, { recursive: true, force: true })

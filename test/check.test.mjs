@@ -50,6 +50,7 @@ async function controllerWith(script, options = {}) {
             })),
           ],
           listModels: async (provider) => (options.served?.[provider] ?? [{ id: 'gemini-4-argon' }]),
+          resolveModelInfo: options.resolveModelInfo,
         }
       }
       if (name === 'credentials') return { resolve: async () => ({ value: 'k' }) }
@@ -100,6 +101,97 @@ test('a check with the switch off goes direct', async () => {
   assert.equal(calls[0].proxy, undefined)
 
   await rm(dir, { recursive: true, force: true })
+})
+
+test('a check shares one native lookup across candidates and compares only upstream input changes', async (t) => {
+  const ids = Array.from({ length: 100 }, (_, index) => `new-${index}`)
+  let officialInput
+  const { controller, dir } = await controllerWith(async () => ({
+    api: 'google-generative-ai', via: 'direct',
+    models: ids.map((id) => id === ids[0] && officialInput ? { id, input: officialInput } : { id }),
+  }))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  controller.proxyState = async () => ({ enabled: false })
+  let reads = 0
+  controller.nativeCatalog = async () => {
+    reads++
+    return [{ id: ids[0], api: 'google-generative-ai', input: ['text'] }]
+  }
+  const check = async () => (await controller.check({ provider: 'google' })).results[0]
+  const first = await check()
+  assert.equal(reads, 1)
+  assert.deepEqual(first.catalog[0].input, ['text'])
+  assert.equal(first.reviewFacts[ids[0]], undefined)
+  assert.equal(first.added[0].blocked, undefined)
+  assert.match(first.added[1].blocked, /上下文窗口/)
+  assert.deepEqual((await check()).upstreamChanged, [])
+  officialInput = ['text']
+  assert.deepEqual((await check()).upstreamChanged, [ids[0]])
+  officialInput = undefined
+  assert.deepEqual((await check()).upstreamChanged, [ids[0]])
+  assert.equal(reads, 4)
+  controller.nativeCatalog = async () => []
+  await assert.rejects(
+    () => controller.apply({ provider: 'google', ids: [ids[0]], removeIds: [] }),
+    /待确认模型调用协议/,
+  )
+})
+
+test('an unavailable native catalog does not veto an effective or live-resolvable model', async (t) => {
+  const models = [{ id: 'gemini-4-argon' }]
+  const { controller, dir } = await controllerWith(async () => ({
+    api: 'google-generative-ai', via: 'direct', models,
+  }), { resolveModelInfo: async (_provider, id) => ({ id }) })
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  controller.proxyState = async () => ({ enabled: false })
+  let reads = 0
+  controller.nativeCatalog = async () => {
+    reads++
+    throw new Error('host catalog unavailable')
+  }
+  const check = async () => (await controller.check({ provider: 'google' })).results[0]
+  const alreadyEffective = await check()
+  assert.equal(alreadyEffective.status, 'ok')
+  assert.deepEqual(alreadyEffective.added, [])
+  models.push({ id: 'live-resolvable' })
+  const withCandidate = await check()
+  assert.equal(withCandidate.status, 'ok')
+  assert.deepEqual(withCandidate.added, [{ id: 'live-resolvable' }])
+  assert.equal(reads, 2)
+})
+
+test('a failed optional catalog read is retried for candidate validation; persistent failure is reported', async (t) => {
+  const { controller, dir } = await controllerWith(async () => ({
+    api: 'google-generative-ai', via: 'direct', models: [{ id: 'new-a' }, { id: 'new-b' }],
+  }))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  controller.proxyState = async () => ({ enabled: false })
+  let reads = 0
+  controller.nativeCatalog = async () => {
+    if (++reads !== 2) throw new Error('host catalog unavailable')
+    return [{ id: 'new-a' }]
+  }
+  const check = async () => (await controller.check({ provider: 'google' })).results[0]
+  const first = await check()
+  assert.equal(reads, 2)
+  assert.equal(first.status, 'ok')
+  const failed = await check()
+  assert.equal(failed.status, 'error')
+  assert.match(failed.error, /host catalog unavailable/)
+  assert.deepEqual(failed.added, first.added)
+})
+
+test('catalog checks retain an unsupported proxy so the transport can refuse it', async (t) => {
+  const url = 'socks5://localhost:1080'
+  const { controller, dir } = await controllerWith(async (input) => {
+    assert.equal(input.proxy, url)
+    throw new Error('unsupported proxy')
+  })
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  controller.proxyState = async () => ({ enabled: true, available: true, url })
+  const { results } = await controller.check({ provider: 'google' })
+  assert.equal(results[0].status, 'error')
+  assert.equal(results[0].error, 'unsupported proxy')
 })
 
 test('a loopback baseURL is never tunnelled, even with the switch on', async () => {

@@ -1104,6 +1104,55 @@ test('editing and reverting provisional fields writes the setting and keeps user
   }
 })
 
+for (const action of ['updateMetadata', 'revertMetadata']) {
+  for (const concurrent of [false, true]) {
+    test(`${action} restores ledger and history after a failed save (${concurrent ? 'later host edit' : 'unchanged host'})`, async (t) => {
+      const model = { id: 'sample', input: ['text', 'image'] }
+      const { controller, document, settings, dir } = await controllerFor({ googleModels: [model] })
+      t.after(() => rm(dir, { recursive: true, force: true }))
+      const metadata = controller.metadataState()
+      metadata.logs = Array.from({ length: 300 }, (_, at) => ({ at, message: 'previous edit' }))
+      if (action === 'revertMetadata') {
+        const record = controller.metadataRecord('google', model.id)
+        record.fields.input = { source: 'models.dev', value: model.input }
+      }
+      const previousLogs = metadata.logs.slice()
+      const previousRecord = structuredClone(metadata.records.google?.[model.id])
+      const laterModels = [{ ...model, name: 'edited elsewhere' }]
+      controller.store.save = async () => {
+        if (concurrent) {
+          const current = settings.describe().find(({ ns }) => ns === PIAI)
+          await settings.mutate(PIAI, [{ op: 'set', path: ['providers', 'google', 'models'], value: laterModels }], current.revision)
+        }
+        throw new Error('disk full')
+      }
+      await assert.rejects(
+        () => controller[action]({ provider: 'google', id: model.id, field: 'input', value: ['text'] }),
+        (error) => concurrent ? error.status === 409 && /已有其他变更/.test(error.message) : error.message === 'disk full',
+      )
+      assert.deepEqual(document[PIAI].providers.google.models, concurrent ? laterModels : [model])
+      assert.deepEqual(metadata.records.google?.[model.id], previousRecord)
+      if (previousRecord === undefined) assert.equal(Object.hasOwn(metadata.records, 'google'), false)
+      assert.deepEqual(metadata.logs, previousLogs)
+    })
+  }
+}
+
+test('failed adoption of a manually changed field leaves both histories untouched', async (t) => {
+  const model = { id: 'sample', input: ['text'] }
+  const { controller, document, writes, dir } = await controllerFor({ googleModels: [model] })
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const record = controller.metadataRecord('google', model.id)
+  record.fields.input = { source: 'models.dev', value: ['text', 'image'] }
+  const previous = structuredClone(record)
+  controller.store.save = async () => { throw new Error('disk full') }
+  await assert.rejects(() => controller.revertMetadata({ provider: 'google', id: model.id }), /disk full/)
+  assert.deepEqual(controller.metadataRecord('google', model.id), previous)
+  assert.deepEqual(controller.metadataState().logs, [])
+  assert.deepEqual(writes, [])
+  assert.deepEqual(document[PIAI].providers.google.models, [model])
+})
+
 test('a hand-written value in DSH settings is preserved and adopted into the ledger', async () => {
   const model = { id: 'gemini-x' }
   const { controller, document, dir } = await controllerFor({ googleModels: [model] })

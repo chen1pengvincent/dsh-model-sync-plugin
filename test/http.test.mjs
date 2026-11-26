@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import net from 'node:net'
 import { after, before, test } from 'node:test'
 
-import { parseProxy, request } from '../lib/http.js'
+import { AbortedError, openStream, parseProxy, request } from '../lib/http.js'
 
 /** @type {net.Server} */
 let tunnel
@@ -97,6 +97,48 @@ function serveOnce(handler) {
   }))
 }
 
+for (const phase of ['TCP connect', 'proxy CONNECT', 'TLS handshake', 'response headers']) {
+  test(`cancellation during ${phase} reports the transport's AbortedError`, async () => {
+    const controller = new AbortController()
+    const { server, port } = await serveOnce((socket) => {
+      socket.on('error', () => {})
+      socket.once('data', () => controller.abort())
+    })
+    const address = `127.0.0.1:${port}`
+    try {
+      const pending = request({
+        url: phase === 'TLS handshake' ? `https://${address}` : `http://${address}`,
+        proxy: phase === 'proxy CONNECT' ? `http://${address}` : undefined,
+        signal: controller.signal,
+        timeoutMs: 1500,
+      })
+      if (phase === 'TCP connect') controller.abort()
+      await assert.rejects(pending, (error) => error instanceof AbortedError && error.code === 'ABORTED')
+    } finally {
+      await new Promise((resolve) => server.close(resolve))
+    }
+  })
+}
+
+test('cancelling while waiting for the next body chunk preserves the cancellation type', async () => {
+  const { server, port } = await serveOnce((socket) => {
+    socket.on('error', () => {})
+    socket.once('data', () => socket.write('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\na'))
+  })
+  const controller = new AbortController()
+  let reply
+  try {
+    reply = await openStream({ url: `http://127.0.0.1:${port}`, signal: controller.signal, timeoutMs: 1500 })
+    assert.equal((await reply.chunks.next()).value.toString(), 'a')
+    const pending = reply.chunks.next()
+    controller.abort()
+    await assert.rejects(pending, (error) => error instanceof AbortedError && error.code === 'ABORTED')
+  } finally {
+    reply?.close()
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
 test('a reply whose headers never end is cut off instead of read forever', async () => {
   const { server, port } = await serveOnce((socket) => {
     socket.write('HTTP/1.1 200 OK\r\nX-Fill: ')
@@ -109,6 +151,35 @@ test('a reply whose headers never end is cut off instead of read forever', async
       request({ url: `http://127.0.0.1:${String(port)}/models`, timeoutMs: 3000 }),
       /exceeded 65536 bytes/,
     )
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+test('a stalled stream consumer pauses upstream reads and can resume without losing bytes', async (t) => {
+  const body = Buffer.alloc(256 * 1024, 'a')
+  const { server, port } = await serveOnce((socket) => socket.once('data', () => {
+    socket.write(`HTTP/1.1 200 OK\r\nContent-Length: ${body.length}\r\n\r\n`)
+    socket.end(body)
+  }))
+  const connect = net.connect
+  let upstream
+  t.mock.method(net, 'connect', (...args) => {
+    upstream = connect(...args)
+    return upstream
+  })
+  try {
+    const reply = await openStream({ url: `http://127.0.0.1:${port}/stream` })
+    try {
+      const chunks = []
+      for await (const chunk of reply.chunks) {
+        assert.equal(upstream.isPaused(), true)
+        chunks.push(chunk)
+      }
+      assert.deepEqual(Buffer.concat(chunks), body)
+    } finally {
+      reply.close()
+    }
   } finally {
     await new Promise((resolve) => server.close(resolve))
   }

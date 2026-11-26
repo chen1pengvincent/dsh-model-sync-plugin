@@ -43,6 +43,7 @@ const args = process.argv.slice(2)
 const direct = args.includes('--direct')
 const proxyArg = args.includes('--proxy') ? args[args.indexOf('--proxy') + 1] : 'http://127.0.0.1:7897'
 const proxy = direct ? undefined : parseProxy(process.env.HTTPS_PROXY ?? proxyArg)
+if (!direct && !proxy) throw new Error('the proxy setting is not usable: specify an HTTP CONNECT proxy or --direct')
 
 const refs = readRefs()
 

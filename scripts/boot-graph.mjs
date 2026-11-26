@@ -22,12 +22,12 @@
 
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { asarModules } from './asar.mjs'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
 const PACKAGE = 'dsh-model-sync'
 
 /** @param {string} name */
@@ -58,7 +58,8 @@ if (existsSync(join(profileDir, 'package.json')) !== true) {
   console.error(`找不到 profile：${profileDir}`)
   process.exit(2)
 }
-if (existsSync(join(assets, '@deepseek-ai', 'dsh-client-modules', 'lib', 'index.js')) !== true) {
+const registryManifest = join(assets, '@deepseek-ai', 'dsh-client-modules', 'package.json')
+if (!existsSync(registryManifest)) {
   console.error(`找不到宿主的客户端模块系统：${join(assets, '@deepseek-ai', 'dsh-client-modules')}`)
   console.error('先把 app.asar 解包到 <本仓库>/.asar/（或设 DSH_ASAR_DIR 指向解包目录），再用 --assets 指定 dsh/node_modules。')
   process.exit(2)
@@ -66,12 +67,11 @@ if (existsSync(join(assets, '@deepseek-ai', 'dsh-client-modules', 'lib', 'index.
 
 const manifest = JSON.parse(await readFile(join(profileDir, 'package.json'), 'utf8'))
 const bundles = Array.isArray(manifest.dsh?.profile?.bundles) ? manifest.dsh.profile.bundles : []
-const names = [...new Set([...bundles, PACKAGE])]
-
-const base = pathToFileURL(join(assets, '@deepseek-ai') + '/').href
-const cordis = await import(new URL('cordis/lib/index.js', base).href)
-const loaderPackage = await import(new URL('cordis-plugin-loader/lib/index.js', base).href)
-const { ClientModuleRegistry } = await import(new URL('dsh-client-modules/lib/index.js', base).href)
+const host = createRequire(registryManifest)
+const loadHost = (name) => import(pathToFileURL(host.resolve(`@deepseek-ai/${name}`)).href)
+const [cordis, loaderPackage, { ClientModuleRegistry }] = await Promise.all([
+  loadHost('cordis'), loadHost('cordis-plugin-loader'), loadHost('dsh-client-modules'),
+])
 
 // A loader rooted in a scratch directory: this check must not read or write the
 // plugin table of any real profile.
@@ -90,11 +90,12 @@ if (ctx.get('loader') === undefined) {
 
 const registry = new ClientModuleRegistry(ctx)
 const baseUrl = pathToFileURL(profileDir + '/').href
-let failed = false
+let failed = !bundles.includes(PACKAGE)
 console.log(`profile: ${profileDir}`)
 console.log(`bundles: ${bundles.length === 0 ? '(空)' : bundles.join(', ')}`)
 console.log('')
-for (const name of names) {
+if (failed) console.log(`❌ ${PACKAGE}: 未在此 profile 的 bundles 中登记`)
+for (const name of new Set(bundles)) {
   let meta
   try {
     meta = registry.resolveMeta(name, baseUrl)
@@ -105,6 +106,7 @@ for (const name of names) {
   }
   if (meta === null) {
     console.log(`·  ${name}: 没有浏览器半边（只有宿主插件）`)
+    if (name === PACKAGE) failed = true
     continue
   }
   const marker = name === PACKAGE ? '→' : '·'

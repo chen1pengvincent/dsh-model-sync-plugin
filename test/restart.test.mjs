@@ -136,6 +136,37 @@ function initialState(dir) {
   }
 }
 
+test('self-check reads diagnostics without projecting sessions or building panel rows', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'model-sync-diagnostics-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const controller = await boot(initialState(dir))
+  t.after(() => controller.dispose())
+  for (const name of ['metadataView', 'reviewView', 'modelUsage']) {
+    controller[name] = () => assert.fail(`self-check invoked panel method ${name}`)
+  }
+  const verdict = await controller.runSelfCheck()
+  assert.equal(verdict.ok, true)
+  assert.ok(verdict.notes.includes('1 个已配置供应商'))
+})
+
+test('disposal during a boot catalog fetch cancels it without arming a late timer', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'model-sync-dispose-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const controller = await boot(initialState(dir))
+  let notifyStarted
+  const fetching = new Promise((resolve) => { notifyStarted = resolve })
+  controller.modelsDevLoader = async ({ signal }) => {
+    notifyStarted()
+    return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+  }
+  const start = controller.start()
+  await fetching
+  await controller.dispose()
+  await start
+  assert.equal(controller.bootTimer, undefined)
+  assert.equal(controller.store.data.selfCheck, undefined)
+})
+
 test('a restart keeps the schedule, the ignore list and the self-check, and writes nothing', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'model-sync-restart-'))
   const state = initialState(dir)

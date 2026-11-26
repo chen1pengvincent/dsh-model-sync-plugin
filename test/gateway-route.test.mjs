@@ -178,6 +178,86 @@ async function controllerFor(options = {}) {
   return { ...fake, controller, dir, gateway, probe }
 }
 
+/** Apply a user's settings edit just before the gateway's next CAS write. */
+function raceNextWrite(ctx, op) {
+  const settings = ctx.get('settings')
+  const mutate = settings.mutate.bind(settings)
+  settings.mutate = async (...args) => {
+    settings.mutate = mutate
+    await mutate(PIAI, [op])
+    return mutate(...args)
+  }
+}
+
+test('a deleted provider is not recreated on retry and its new listener is closed', async (t) => {
+  const { ctx, controller, document, dir } = await controllerFor()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  raceNextWrite(ctx, { op: 'unset', path: ['providers', 'google'] })
+  await assert.rejects(controller.routeGateway({ provider: 'google' }), /changed during/)
+  assert.deepEqual(document[PIAI].providers, {})
+  assert.deepEqual(controller.store.data.gateway.entries, {})
+  assert.equal(controller.gatewayHandle, undefined)
+  assert.equal(controller.exitTimer, undefined)
+})
+
+test('a settings write that took effect before its reply failed keeps the active listener', async (t) => {
+  const { ctx, controller, dir } = await controllerFor()
+  t.after(async () => { await controller.dispose(); await rm(dir, { recursive: true, force: true }) })
+  const settings = ctx.get('settings')
+  const mutate = settings.mutate.bind(settings)
+  settings.mutate = async (...args) => {
+    await mutate(...args)
+    throw new Error('acknowledgement lost')
+  }
+  const result = await controller.routeGateway({ provider: 'google' })
+  assert.equal(result.baseURL, `${controller.gatewayHandle.url}/g/google`)
+  assert.ok(controller.store.data.gateway.entries.google)
+})
+
+test('undo preserves the protocol edited during a revision conflict', async (t) => {
+  const { ctx, controller, document, dir } = await controllerFor({ probe: { attribution: MIXED } })
+  t.after(async () => { await controller.dispose(); await rm(dir, { recursive: true, force: true }) })
+  await controller.routeGateway({ provider: 'google' })
+  raceNextWrite(ctx, { op: 'set', path: ['providers', 'google', 'api'], value: 'anthropic-messages' })
+  await assert.rejects(controller.unrouteGateway({ provider: 'google' }), /changed during/)
+  assert.equal(document[PIAI].providers.google.api, 'anthropic-messages')
+  assert.equal(document[PIAI].providers.google.baseURL, 'http://127.0.0.1:41234/g/google')
+  assert.ok(controller.store.data.gateway.entries.google)
+  await controller.revertRoutedBases('boot')
+  assert.equal(document[PIAI].providers.google.api, 'anthropic-messages')
+  assert.equal(controller.store.data.gateway.status, 'revert-failed')
+})
+
+test('boot port repair and rollback only write to matching loopback routes', async (t) => {
+  const { ctx, controller, document, dir } = await controllerFor({ providers: { other: { baseURL: 'https://api.example/v1' } } })
+  t.after(async () => { await controller.dispose(); await rm(dir, { recursive: true, force: true }) })
+  for (const provider of ['google', 'other']) await controller.routeGateway({ provider })
+
+  await controller.reconcileGatewayPort(40000)
+  for (const provider of ['google', 'other']) {
+    assert.equal(document[PIAI].providers[provider].baseURL, `http://127.0.0.1:40000/g/${provider}`)
+  }
+  const foreign = 'https://example.com/g/google'
+  raceNextWrite(ctx, { op: 'set', path: ['providers', 'google', 'baseURL'], value: foreign })
+  await controller.reconcileGatewayPort(41000)
+  assert.equal(document[PIAI].providers.google.baseURL, foreign)
+  assert.equal(document[PIAI].providers.other.baseURL, 'http://127.0.0.1:41000/g/other')
+  await assert.rejects(controller.unrouteGateway({ provider: 'google' }), /no longer points/)
+  await controller.revertRoutedBases('boot')
+  assert.equal(document[PIAI].providers.google.baseURL, foreign)
+  assert.equal(document[PIAI].providers.other.baseURL, 'https://api.example/v1')
+  assert.deepEqual(Object.keys(controller.store.data.gateway.entries), ['google'])
+})
+
+test('an inherited upstream address remains inherited after routing and undo', async (t) => {
+  const { controller, document, dir } = await controllerFor({ providers: { inherited: { defaultBaseURL: 'https://api.example/v1' } } })
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  await controller.routeGateway({ provider: 'inherited' })
+  assert.equal(controller.store.data.gateway.entries.inherited.upstreamBaseURL, 'https://api.example/v1')
+  await controller.unrouteGateway({ provider: 'inherited' })
+  assert.equal(Object.hasOwn(document[PIAI].providers.inherited, 'baseURL'), false)
+})
+
 test('routing a provider writes only its baseURL and remembers what it replaced', async () => {
   const { controller, document, writes, gateway, dir } = await controllerFor()
   try {
@@ -218,6 +298,45 @@ test('the gateway state reports the live listener and survives a dispose', async
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('unloading during gateway startup releases the listener and leaves the route for the next boot', async (t) => {
+  const { controller, dir, writes } = await controllerFor()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const entries = { google: { routeId: 'google', upstreamBaseURL: GOOGLE_BASE } }
+  controller.store.data.gateway = { enabled: true, entries }
+  let started, release
+  const starting = new Promise((resolve) => { started = resolve })
+  const ready = new Promise((resolve) => { release = resolve })
+  let stops = 0
+  controller.gateway = { createGateway: () => ({
+    port: 41234,
+    start: () => { started(); return ready },
+    stop: () => { stops += 1 },
+  }) }
+  const restoring = controller.restoreGateway()
+  await starting
+  const disposing = controller.dispose()
+  release()
+  await Promise.all([restoring, disposing])
+  assert.equal(stops, 1)
+  assert.equal(controller.gatewayHandle, undefined)
+  assert.equal(controller.exitTimer, undefined)
+  assert.deepEqual(controller.store.data.gateway.entries, entries)
+  assert.deepEqual(writes, [])
+})
+
+test('a listener is closed if its port cannot be saved', async (t) => {
+  const { controller, dir } = await controllerFor()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  controller.store.data.gateway = { enabled: true, entries: { google: { routeId: 'google', upstreamBaseURL: GOOGLE_BASE } } }
+  const handle = controller.gateway.createGateway({})
+  controller.gateway = { createGateway: () => handle }
+  controller.store.save = async () => { throw new Error('disk full') }
+  await assert.rejects(controller.startGateway(), /disk full/)
+  assert.equal(handle.port, undefined)
+  assert.equal(controller.gatewayHandle, undefined)
+  assert.equal(controller.exitTimer, undefined)
 })
 
 test('undoing a route restores the baseURL it had before', async () => {

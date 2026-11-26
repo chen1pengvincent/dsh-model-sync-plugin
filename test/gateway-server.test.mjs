@@ -10,9 +10,11 @@
 
 import assert from 'node:assert/strict'
 import http from 'node:http'
+import net from 'node:net'
+import { once } from 'node:events'
 import { after, before, test } from 'node:test'
 
-import { createGateway, protocolOfTail, splitGatewayPath } from '../lib/gateway/server.js'
+import { createGateway, MAX_ERROR_BYTES, protocolOfTail, splitGatewayPath } from '../lib/gateway/server.js'
 
 /** @type {http.Server} */
 let upstream
@@ -43,6 +45,12 @@ before(async () => {
           heldClosed = true
           heldResolve?.()
         })
+        return
+      }
+
+      if (request.url === '/long-error/chat/completions') {
+        response.writeHead(503, { 'content-type': 'text/plain' })
+        response.end(Buffer.alloc(MAX_ERROR_BYTES * 3, 'a'))
         return
       }
 
@@ -162,6 +170,37 @@ test('a same-protocol request is proxied verbatim and streamed through', async (
     assert.equal(hit.path, '/v1/chat/completions')
     assert.equal(hit.headers.authorization, 'Bearer sk-test')
     assert.deepEqual(JSON.parse(hit.body), { model: 'm1', messages: [{ role: 'user', content: 'hi' }] })
+  } finally {
+    await gateway.stop()
+  }
+})
+
+test('an unsupported configured proxy fails the gateway request before contacting the upstream', async () => {
+  const gateway = createGateway({
+    routes: () => routeTable(),
+    proxyFor: () => 'socks5://127.0.0.1:9',
+  })
+  await gateway.start()
+  try {
+    const before = seen.length
+    const reply = await call(gateway, '/g/r1/chat/completions', { model: 'm1' })
+    assert.equal(reply.status, 502)
+    assert.match(reply.text, /proxy setting is not usable/)
+    assert.equal(seen.length, before)
+  } finally {
+    await gateway.stop()
+  }
+})
+
+test('a large upstream error is capped at the exact byte budget', async () => {
+  const gateway = createGateway({ routes: () => routeTable({
+    upstreamBaseURL: `http://127.0.0.1:${upstreamPort}/long-error`,
+  }) })
+  await gateway.start()
+  try {
+    const reply = await call(gateway, '/g/r1/chat/completions', { model: 'm1' })
+    assert.equal(reply.status, 503)
+    assert.equal(reply.text, 'a'.repeat(MAX_ERROR_BYTES))
   } finally {
     await gateway.stop()
   }
@@ -447,6 +486,36 @@ test('a completions request for an anthropic model is translated the other way',
     assert.equal(hit.headers['anthropic-version'], '2023-06-01')
   } finally {
     await gateway.stop()
+  }
+})
+
+test('a caller leaving during the proxy handshake releases the unfinished upstream request', async () => {
+  const proxy = net.createServer()
+  proxy.listen(0, '127.0.0.1')
+  await once(proxy, 'listening')
+  const gateway = createGateway({
+    routes: () => routeTable(),
+    proxyFor: () => `http://127.0.0.1:${proxy.address().port}`,
+  })
+  let socket
+  let client
+  try {
+    await gateway.start()
+    const connecting = once(proxy, 'connection')
+    client = http.request({ host: '127.0.0.1', port: gateway.port, path: '/g/r1/chat/completions', method: 'POST' })
+    client.on('error', () => {})
+    client.end(JSON.stringify({ model: 'm1' }))
+    socket = (await connecting)[0]
+    await once(socket, 'data') // The CONNECT was sent, but the proxy has not answered.
+    const closed = once(socket, 'close', { signal: AbortSignal.timeout(2000) })
+    client.destroy()
+    await closed
+    assert.equal(gateway.stats().failures, 0)
+  } finally {
+    client?.destroy()
+    socket?.destroy()
+    await gateway.stop()
+    await new Promise((resolve) => proxy.close(resolve))
   }
 })
 

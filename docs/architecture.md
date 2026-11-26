@@ -1,131 +1,72 @@
-# 架构
+# 架构与设计沿革
 
-这份文档写给要改代码的人。它按「一次检查、一次保存、一次代理声明」三条路径讲，最后给出判据与测试地图。
+模型管理要回答三个独立的问题：供应商现在提供哪些模型，用户希望在对话中看到哪些模型，各字段的值有什么依据。供应商目录、DSH 的实际配置、用户选择分别保存。上游少返回一个 ID 可以触发提示，不能据此删除已配置的模型。一次目录检查可以按来源规则补全字段，模型的显示和隐藏由用户保存。
 
-## 1. 分层
+## 设计沿革
 
-```
-lib/index.js            宿主半入口：apply(ctx) / inject / name
-  └─ lib/controller.js  唯一的状态机与写入口
-       ├─ lib/targets.js      「哪些 provider 真的已配置」（权威枚举）
-       ├─ lib/discovery.js    协议阶梯 + 并发归属 + transient 重试
-       ├─ lib/endpoints.js    地址未知时的兜底地址表
-       ├─ lib/plan.js         diff → ops（纯函数，不 IO）
-       ├─ lib/state.js        账本 / 快照 / 版本闸
-       ├─ lib/http.js         自写 net/tls 客户端（共用出口）
-       ├─ lib/bili.js         代理声明（只写 providers 表）
-       ├─ lib/gateway/        协议网关（回环监听 + 编解码）
-       └─ lib/verify.js       自检判据（纯函数）
-lib/client.js           浏览器半：settings.section 面板（无 DOM 注入）
-lib/api.js              /model-sync/api 的动词分发
-lib/install.js          四处引用 + generation + 符号链 + 回验
-lib/rollback.js         外科式还原
-```
+截至 `b9b6a83`（v3.1.3），GitHub 主线有 54 次提交、16 个版本标签。仓库的全部状态 PR 列表为空。预览分支的 `c028dc3` 已在主线历史内。以下依据提交差异、提交说明和仍在使用的入口还原设计决策。[提交历史](https://github.com/chen1pengvincent/dsh-model-sync-plugin/commits/b9b6a83/) · [全部 PR](https://api.github.com/repos/chen1pengvincent/dsh-model-sync-plugin/pulls?state=all)
 
-依赖方向是单向的：`controller` 认识所有人，其他人不认识 `controller`。`plan.js`、`verify.js`、`state.js`、`gateway/protocol.js` 不产生 IO，所以可以在测试里直接喂数据。
-
-## 2. 三条路径
-
-### 2.1 检查：从「哪些路由真的已配置」开始
-
-```
-settings.describe({redactSecrets:true})   ← 唯一真相：配置里有什么
-llm.listConfigurableProviders()           ← 注册表：DSH 认识哪些（≠ 已配置）
-        ↓ 交集
-lib/targets.js:configuredTargets()
-        ↓ 每条路由
-baseURL = profile.baseURL ?? 环境变量 ?? defaultBaseURL ?? 地址表
-protocol = profile.api ?? 端点协议
-        ↓
-lib/discovery.js:listAll()  → 协议阶梯（依次试四种协议的列举端点，记录归属）
-        ↓
-controller.checkOne()  → { status, upstream[], added[], removed[], attribution }
-```
-
-两个坑必须记住：
-
-- **注册 ≠ 已配置**。只有在配置里真的存在 `settingsPath` 指向的对象，这条路由才算存在。否则你会在面板里给一个从未配置的供应商「加模型」。
-- **协议是「问出来的」，不是查表得来的**。`sharedCatalogApi()` 只在路由的目录模型恰好同属一种协议时才给答案，跨协议时返回 `undefined`。所以归属必须靠真请求判定；这也是 0.x 那个 12 MB 的 `models.dev.json` 在 2.0 里被删掉的原因。
-
-### 2.2 保存：没有第二条写路径
-
-```
-面板（草稿）→ POST /model-sync/api/apply {provider, ids}
-        ↓
-controller.apply()
-  ├─ 重新读配置（绝不重放旧计划：那会重建别人刚删的键）
-  ├─ plan.js:diff()  → ops（只允许 ['providers', X, 'models']）
-  ├─ state.snapshot('before-apply')   ← 写前留证
-  ├─ settings.mutate(ns, ops, revision) ← 唯一提交点
-  └─ 409 → 重算并重试一次（仍是 409 就把原因给人看）
-```
-
-几条纪律：
-
-- **只写 `models`**。例外只有三处，且都写前快照：删除上一版留下的合成键（`unset`）、网关写 `baseURL`/`api`、混合协议路由「收拢」时写 `api`。
-- **删到最后一个模型时写 `unset`**。pi-ai 把 `models: []` 和「没有列表」看成同一件事，写空数组会让整张内置目录回来。
-- **冲突不重放**。revision 冲突时按最新配置重新计算；重放旧 op 会凭空重建 provider 键。
-- **快照脱敏**。`describe({redactSecrets:true})` 只藏 schema 标了 secret 的字段，而 `headers` 是普通字符串表，所以快照前把 header 值全部替换为 `***`，文件 0600。错误文本里的 query 值也会去掉（有的网关把 key 放在 `?key=`）。
-
-### 2.3 代理声明：只碰自己的键
-
-已配置路由的上游主机与受管清单取交集。共享锁串行化 desktop 和 web 的出网对账。系统代理通过探测后才写入。确认受管声明失效时，插件备份、撤销并回读核对。不可达的手工声明在「网络出口详情」中告警，原配置会保留。
-
-bili 的熔断按上游地址记录。连续三次响应前失败后，首轮冷却为 60 秒。代理声明的撤销或恢复不会清除这段状态。冷却结束后 bili 才允许重试，重试再次失败会进入下一轮。当前 bili 版本未提供手动重置熔断的接口。
-
-生产环境默认在 `~/.dsh/model-sync/` 中存放共享出网账本和锁。测试用 `DSH_MODEL_SYNC_EGRESS_DIR` 将两者一起隔离到临时目录。
-
-为什么不能用 `fetch` 或 `node:http`：本机 `NODE_USE_ENV_PROXY=1` 会劫持 `http.request`（CONNECT 会挂住 60 秒），而 `fetch` 会被别的插件改写成回环地址。所以 `lib/http.js` 自己写 socket：HTTP 代理用 CONNECT 隧道、SOCKS 明确拒绝（不静默直连）、响应头有字节上限（64 KiB）、SSE 按三种框架（`content-length` / `chunked` / 读到关闭）流式读出。
-
-## 3. 协议网关
-
-网关是**可选**的一层，只在「上游有、DSH 目录里没有的模型 id」时才有意义。
-
-```
-DSH ──POST /g/<route>/chat/completions──→ 网关（127.0.0.1）
-                                            ├─ model 归属 == 入站协议 → 逐字节透传
-                                            └─ 否则 decodeRequest → encodeRequest(上游协议)
-                                                       ↑ SSE        ↓ SSE
-                                                createStreamDecoder / createStreamEncoder
-```
-
-- 规范请求/事件是中间表示：`{model, system, messages:[{role, parts}], tools, stream}` 与 `start | text | thinking | tool-call-* | usage | finish | error`。
-- 四种协议：`openai-completions`、`openai-responses`、`anthropic-messages`、`google-generative-ai`。
-- 无损边界：跨协议时 thinking 签名、`cache_control`、responses 的 reasoning item 会丢（上游 SDK 自己也丢）；Gemini 没有 tool id，只能按函数名回指。
-- 上游出口**不复用**入站连接，也不走 `fetch`：`lib/http.js` + 系统代理，只对需要代理的主机生效。
-- 撤销守卫：路由里还有「靠收拢才存在」的模型时拒绝撤销，先把它们移除。
-
-## 4. 面板
-
-- 只注册一个 `settings.section`（`id: model-sync`），不注入 DOM、不覆写别人的 slot。
-- 三个页面分别是模型管理、待确认模型信息、同步历史；模型选择与模型字段使用不同草稿和保存 API。
-- 模型选择使用 `Map` 保存 `[provider, id]` 维度的草稿；模型信息使用另一份 `Map` 保存字段级草稿。所有写入都必须先变成草稿。
-- v3.1.2 的待确认列表使用 61 px 三行结构：名称与当前状态、模型 ID、供应商与信息状态／草稿。第一页蓝白结构及关键尺寸保持不变。
-- 当前状态只来自真实 `issues`，信息状态只来自 `level`；`host` 继续显示「本机已确认」，不把历史官方值误标为内置目录。
-- **回调签名是契约**：`textButton` 包装成 `onClick: () => onClick()`，绝不把事件对象透给期望业务参数的处理器（0.x → 2.0 的「清空点了没反应」就是这么来的）。
-- 三个不可逆按钮走两次点击（`confirmed` + 6 秒自动撤）。
-
-## 5. 状态文件
-
-```
-<profile>/model-sync/
-  state.json                  version: 1，账本（检查结果、草稿不落盘、自检结论、代理记账）
-  snapshots/                  before-apply / before-prune / before-gateway（保留 20 份）
-  bili-config-<ISO>.json      每次写外部配置前的整份备份
-```
-
-- `version !== 1` 或 JSON 损坏 → 归档成 `state.json.rejected-<ISO>.json` 并在面板提示；**全新安装**（文件不存在）不归档，直接空账本起步。
-- 同一时刻只跑一次自检（promise 去重），否则启动那次与点击那次会互相覆盖结论。
-
-## 6. 判据与测试地图
-
-| 层 | 文件 | 看什么 |
+| 阶段 | 当时的问题和选择 | 对当前实现的影响 |
 | --- | --- | --- |
-| 纯函数 | `test/state`、`plan`（并入 controller 用例）、`verify`、`gateway-protocol` | 不碰 IO，喂数据断言输出 |
-| 控制器 | `test/controller`（最大一份） | 假 settings + 假 llm，断言「写了什么、没写什么」 |
-| 网关 | `test/gateway-server`、`gateway-route`、`gateway-gemini` | 假上游 + 真 HTTP，断言帧序列 |
-| 面板 | `test/client-bundle`、`panel-integration`、`panel-actions` | 契约、真实 view 渲染、点击后状态（迷你 hook 运行时） |
-| 安装 | `test/install`、`rollback` | 假 `DSH_HOME` 里真跑一步 |
-| 启动 | `test/restart`、`smoke` | 同一状态目录跑两次控制器 |
+| 0.2–0.10 | 早期通过额外的协议子路由让同一服务商支持多个协议。子路由出现在官方卡片和选择器后，陆续加了隐藏卡片、嵌入原生列表和按组展示。[初版](https://github.com/chen1pengvincent/dsh-model-sync-plugin/commit/4275f9c) · [协议子路由](https://github.com/chen1pengvincent/dsh-model-sync-plugin/commit/38f21f4) · [嵌入官方列表](https://github.com/chen1pengvincent/dsh-model-sync-plugin/commit/d324131) | 创建和遮蔽卡片的实现已随 v2 重写退出。旧 profile 仍可能有同名键，也可能由用户手工创建，因此保留只读提示和旧账本归档。 |
+| 0.11–0.12 | 固定名单逐步改为从宿主发现已配置供应商。为让聊天使用系统代理，插件曾修改宿主全局 dispatcher，随后又需处理启动策略、凭证及卸载顺序。[动态发现](https://github.com/chen1pengvincent/dsh-model-sync-plugin/commit/cbdc9a8) · [全局代理](https://github.com/chen1pengvincent/dsh-model-sync-plugin/commit/150fdf3) · [卸载修复](https://github.com/chen1pengvincent/dsh-model-sync-plugin/commit/ce931e6) | v2 重写记录了失效前提：实际聊天出口可以在另一个进程。当前目录请求自行选择出口，聊天所需声明通过 bili 单独对账。 |
+| 2.0–2.0.1 | 不再创建供应商键。普通路由使用原协议，目录外模型确需转换时才启用回环网关。随后把“已登记”和“对话可见”拆开，恢复成单一勾选清单。[重写说明](https://github.com/chen1pengvincent/dsh-model-sync-plugin/commit/acb81bf) · [可见性决策](https://github.com/chen1pengvincent/dsh-model-sync-plugin/commit/3040461) · [统一清单](https://github.com/chen1pengvincent/dsh-model-sync-plugin/commit/8cee92a) | 有意保留四种协议、原生选择器适配及会话使用量检查。隐藏模型可以保留历史会话使用的配置。 |
+| 2.2–3.1.2 | models.dev 重新用于补参。精确的供应商和 ID 匹配能提供候选，相同家族只能提供展示信息。复核和历史随后加入逐字段来源、锁定、忽略和路由身份校验。[元数据预览](https://github.com/chen1pengvincent/dsh-model-sync-plugin/commit/4c8096a) · [强制刷新](https://github.com/chen1pengvincent/dsh-model-sync-plugin/commit/c028dc3) · [复核与同步历史](https://github.com/chen1pengvincent/dsh-model-sync-plugin/commit/d265151) · [3.1.2](https://github.com/chen1pengvincent/dsh-model-sync-plugin/commit/b35ee8f) | 保留主动刷新和失败时读取旧缓存的能力。保留用户拒绝过的字段记录，防止启动时重新补回。协议归属仍由协议探测决定。 |
+| 3.1.3 | Desktop 和 Web 可以同时管理同一 bili 出口。跨进程锁、共享账本、探测及写后回读用于区分归属和识别失效代理。[出网修复](https://github.com/chen1pengvincent/dsh-model-sync-plugin/commit/b9b6a83) | 定时对账仍有职责。每次观察只需查受管主机；获取自身进程启动标识可以复用，判断其他进程是否仍拥有旧锁则需要实时查询。 |
 
-写作约定：假宿主的结构必须从真实 schema 抄；测试接缝必须 fail-closed（缺写入器就抛错，绝不「有 A 用 A 否则退回真实实现」——这条是踩过事故之后写下来的）。
+## 运行路径
+
+**目录检查。** `targets.js` 将宿主注册表与 `settings.describe({redactSecrets:true})` 的有效配置连接，再用 `llm.listModels(provider)` 确认可用模型。限定单一供应商时，其他供应商的目录和凭证都可以跳过。`discovery.listModels()` 依次尝试协议阶梯，成功即返回。网关需要知道每个模型的协议归属，才使用 `listAll()`。批量校验共享本次读取的宿主目录，下一次保存会重新读取。路由身份绑定端点及凭证信息的摘要，避免把旧供应商的证据当成本路由的依据。
+
+**保存与撤销。** `controller.js` 编排写入，`plan.js` 生成模型列表的变更。提交前读取最新配置，带 revision 调用 `settings.mutate`，保留写前快照。原生选择器通过可见性 API 读取 `[provider, id]` 隐藏清单。模型字段的复核要求路由、revision、候选来源和值仍与预览一致。账本落盘失败时，字段回滚先确认宿主版本和插件刚写入的内容。旧的 `prune` 请求返回 409；另一个 `cleanup` API 只接受显式指定且宿主注册表未识别的键，面板仅展示待核对项。
+
+**面板与自查。** `lib/client.js` 只注册一个 `settings.section`。模型选择、字段复核分别使用草稿，第三页显示同步历史。`lib/model-metadata.js` 负责字段规则，以及从当前路由和账本生成复核行和历史。面板 API 保留原有 `metadata` 和 `review` 返回结构。自查共用诊断字段，单独获取最新供应商、网关和 bili 状态；启动等待供应商注册时只重读路由。打开面板或保存选择时，仍按需读取会话使用量。宿主挂载路由后，首次 API 请求等待本地账本加载，不必等待网络目录刷新。
+
+**协议网关。** `lib/gateway/server.js` 在首次启动网关时加载。四种协议的名单由 `protocols.js` 提供；`protocol.js` 只在跨协议请求中加载。相同协议逐字节转发，跨协议请求才经过请求、事件和 SSE 编解码。共享中间表示涵盖消息、工具和流式事件。跨协议能力受目标协议限制，例如 Gemini 的工具结果按函数名关联。网关写回前重新核对供应商、端点及协议；路由在操作途中被删除时保留删除结果。撤销时恢复原本显式配置或继承的地址。还有依赖协议收拢的模型时，撤销路由会被拒绝。宿主卸载时关闭监听器，清理定时器；下游停读或断开时，向上游传递背压或取消。
+
+**出网。** `lib/http.js` 使用 net/tls socket，使目录读取和网关转发独立于宿主的全局 dispatcher、fetch 改写和其他插件。HTTP CONNECT、响应大小上限与三种响应体分帧均有专门测试。网关从缓存的健康状态选择出口。`lib/egress/` 独立处理声明的观察、决策、加锁、执行和回读；受管变更执行前备份配置。手工代理探测失败时保留原值。bili 的 60 秒首轮熔断冷却由 bili 自己维护。
+
+## 持久化与升级
+
+| 位置 | 内容和约束 |
+| --- | --- |
+| `<profile>/model-sync/state.json` | 版本 1 账本，含检查结果、显示选择、字段来源、历史和自查结论。写入串行化并以临时文件原子替换。旧版本或损坏的 JSON 会尝试归档并提示，从未安装过的 profile 直接使用空账本。 |
+| `<profile>/model-sync/snapshots/` | 最近 20 份配置快照。宿主脱敏之外再遮蔽 header 值，以 0600 权限写入。 |
+| `<profile>/model-sync/models.dev.json` | 原始公共目录和获取时间。有效刷新成功后写入新缓存，刷新失败可继续显示旧数据的时间和状态。 |
+| `~/.dsh/model-sync/` | Desktop 和 Web 共用的出网账本与锁。测试通过 `DSH_MODEL_SYNC_EGRESS_DIR` 指向临时目录。 |
+
+`lib/install.js` 与 `lib/rollback.js` 管理 profile 引用、generation 和链接。旧 profile、多个 profile 共享 generation 以及本地已有凭证都是当前支持的输入，不能因为新装路径更简单就删掉对应保护。
+
+## 本次重构的依据
+
+已经移除三类遗留：没有仓内调用或包导出的旧方法（独立代理选择、元数据值标签、快照读取），只为读取首项却常驻整组对象的 canonical 索引，以及会按最新 revision 盲目覆盖模型列表的旧元数据回滚。它们所承载的现行职责分别由请求传输、字段投影、磁盘快照、首条展示候选和带版本的回滚路径承担。
+
+以下计数来自相同离线输入，对照基线 `b9b6a83`。前四行使用 8 条路由、每条 100 个模型、20 个会话，其中一条路由匹配受管代理主机；两版的完整面板 JSON、受管主机列表和自查结论逐项相等。
+
+| 操作及计数单位 | 基线 | 重构后 |
+| --- | ---: | ---: |
+| 打开面板，宿主模型目录读取 | 16 | 8 |
+| 一次后台受管主机枚举，宿主目录读取 / 凭证解析 | 8 / 8 | 1 / 0 |
+| 一次自查，宿主模型目录读取 | 104 | 32 |
+| 一次自查，会话投影 / 快照列表读取 | 40 / 2 | 0 / 0 |
+| 一条路由有 100 个新增候选、500 个宿主模型，单次检查读取宿主内置目录 | 101 | 1 |
+| 5,000 条目录记录，强制刷新成功时读取旧缓存的字节数 | 5,356,731 | 0 |
+| 2 MiB 目录按 128 段经本机 TCP 返回，Buffer.concat 累计分配字节数 | 132,431,820 | 2,097,152 |
+| macOS 同一进程连续获得出网锁 12 次，启动 /bin/ps 的次数 | 12 | 1 |
+
+这些数字度量指定操作。用户机器上的 CPU 占用和常驻内存还取决于目录规模、路由、会话数及网关流量。
+
+## 验证入口
+
+- `node --test` 覆盖状态升级、安装回滚、面板渲染与点击、跨协议事件、流读取、断线回收和两个 profile 共同对账。bili 对账的常规测试使用隔离 fixture。
+- `test/targets.test.mjs`、`test/check.test.mjs` 和 `test/models-dev.test.mjs` 覆盖筛选、宿主目录读取次数、候选有效性及缓存回退。
+- `test/controller.test.mjs`、`test/restart.test.mjs` 和 `test/gateway-route.test.mjs` 覆盖字段事务、并发修改、启动顺序和卸载。
+- `test/boot-graph.test.mjs` 配合宿主载荷，验证宿主解析到当前源码的浏览器入口。真实 bili 的两项联测经 `DSH_MODEL_SYNC_TEST_LIVE_BILI=1` 单独启用，其中一项会写入运行中的实例。
+
+在安装了 DSH 的 macOS 上，可以用应用自带的 Node 运行时直接读取 app.asar，验证当前 checkout 的面板入口。
+
+```sh
+DSH_APP="/Applications/DeepSeek Harness.app"
+ELECTRON_RUN_AS_NODE=1 DSH_ASAR_DIR="$DSH_APP/Contents/Resources/app.asar" \
+  "$DSH_APP/Contents/MacOS/DeepSeek Harness" --test test/boot-graph.test.mjs
+```

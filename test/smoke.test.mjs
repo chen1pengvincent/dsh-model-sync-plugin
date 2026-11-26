@@ -169,6 +169,25 @@ test('an unknown verb is a 404 and a write verb is refused without a body', asyn
   await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 })
 })
 
+test('the first picker request on activation reads the saved choices', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'model-sync-early-picker-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const stateDir = join(dir, 'model-sync')
+  await mkdir(stateDir)
+  const hidden = [['google', 'gemini-4-argon']]
+  await writeFile(join(stateDir, 'state.json'), JSON.stringify({ version: 1, hiddenModels: hidden }))
+  const { ctx, routes, disposers } = fakeContext(dir)
+  entry.apply(ctx)
+  try {
+    const response = fakeResponse()
+    await routes[0].handler(fakeRequest({ url: '/model-sync/api/visibility', method: 'GET' }), response)
+    assert.equal(response.status, 200)
+    assert.deepEqual(JSON.parse(response.body).hidden, hidden)
+  } finally {
+    for (const dispose of disposers) await dispose?.()
+  }
+})
+
 test('a broken service does not throw out of apply, and leaves a note behind', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'model-sync-smoke-'))
   const { ctx, disposers } = fakeContext(dir)

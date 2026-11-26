@@ -28,6 +28,7 @@ const MITM = `mitm://${GOOGLE}`
 const OLD = 'http://127.0.0.1:7897'
 const ALT = 'http://127.0.0.1:7890'
 const LIVE_ORIGIN = 'http://127.0.0.1:18787'
+const liveOnly = { skip: process.env.DSH_MODEL_SYNC_TEST_LIVE_BILI !== '1' && 'set DSH_MODEL_SYNC_TEST_LIVE_BILI=1 to test a running bili instance' }
 
 const ALIVE = { ok: true, reachable: true, reason: 'ok' }
 const DEAD = { ok: false, reachable: false, reason: 'refused' }
@@ -107,7 +108,7 @@ async function liveLane() {
   }
 }
 
-test('A1: the real bili GET satisfies the raw-vs-providers guard readLane relies on', async (t) => {
+test('A1: the real bili GET satisfies the raw-vs-providers guard readLane relies on', liveOnly, async (t) => {
   const live = await liveLane()
   if (live === undefined) return t.skip('bili is not running on 18787')
   const parsed = JSON.parse(live.reply.text)
@@ -118,7 +119,7 @@ test('A1: the real bili GET satisfies the raw-vs-providers guard readLane relies
   assert.deepEqual(lane.snapshot.providers, parsed.providers)
 })
 
-test('A2: the real bili accepts the narrow providers write the executor sends', async (t) => {
+test('A2: the real bili accepts the narrow providers write the executor sends', liveOnly, async (t) => {
   const live = await liveLane()
   if (live === undefined) return t.skip('bili is not running on 18787')
   const before = JSON.parse(live.reply.text).providers
