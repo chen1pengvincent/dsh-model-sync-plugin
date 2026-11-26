@@ -9,8 +9,10 @@
  */
 
 import assert from 'node:assert/strict'
-import { getEventListeners } from 'node:events'
+import { randomBytes } from 'node:crypto'
+import { getEventListeners, once } from 'node:events'
 import net from 'node:net'
+import tls from 'node:tls'
 import { after, before, test } from 'node:test'
 
 import { AbortedError, openStream, parseProxy, request } from '../lib/http.js'
@@ -162,6 +164,35 @@ test('cancelling while waiting for the next body chunk preserves the cancellatio
     const pending = reply.chunks.next()
     controller.abort()
     await assert.rejects(pending, (error) => error instanceof AbortedError && error.code === 'ABORTED')
+  } finally {
+    reply?.close()
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+test('aborting an established TLS stream reports cancellation to its pending reader', async (t) => {
+  // A single-use shared key authenticates the fixture without a certificate file.
+  const key = randomBytes(32)
+  const fixture = { maxVersion: 'TLSv1.2', ciphers: 'PSK-AES128-CBC-SHA' }
+  const server = tls.createServer({
+    ...fixture, pskCallback: (_, identity) => identity === 'fixture' ? key : null,
+  }, (socket) => socket.once('data', () => {
+    socket.write('HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\n')
+  }))
+  const connect = tls.connect
+  t.mock.method(tls, 'connect', (options) => connect({
+    ...options, ...fixture, pskCallback: () => ({ identity: 'fixture', psk: key }), checkServerIdentity: () => undefined,
+  }))
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const controller = new AbortController()
+  let reply
+  try {
+    reply = await openStream({ url: `https://127.0.0.1:${server.address().port}`, signal: controller.signal, timeoutMs: 1500 })
+    assert.equal((await reply.chunks.next()).value.toString(), 'a')
+    const waiting = reply.chunks.next()
+    controller.abort()
+    await assert.rejects(waiting, (error) => error instanceof AbortedError && error.code === 'ABORTED')
   } finally {
     reply?.close()
     await new Promise((resolve) => server.close(resolve))

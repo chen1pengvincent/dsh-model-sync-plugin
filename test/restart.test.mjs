@@ -198,6 +198,39 @@ test('self-check reads diagnostics without projecting sessions or building panel
   assert.ok(verdict.notes.includes('1 个已配置供应商'))
 })
 
+test('disposal drains a self-check paused in diagnostics and preserves a replacement profile write', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'model-sync-selfcheck-dispose-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const state = initialState(dir)
+  const controller = await boot(state)
+  const entered = Promise.withResolvers()
+  const release = Promise.withResolvers()
+  controller.proxyWatcher.current = async () => {
+    entered.resolve()
+    await release.promise
+    return { source: 'none' }
+  }
+  const checking = controller.runSelfCheck()
+  await entered.promise
+  let disposed = false
+  const draining = controller.dispose().then(() => { disposed = true })
+  await new Promise((resolve) => setImmediate(resolve))
+  const finishedEarly = disposed
+  const replacement = await boot(state)
+  try {
+    await replacement.persistVisibility([{ provider: 'google', id: 'gemini-4-argon', visible: false }])
+  } finally {
+    release.resolve()
+  }
+  await assert.rejects(checking, { name: 'AbortError' })
+  await draining
+  assert.equal(finishedEarly, false)
+  await replacement.store.load()
+  assert.deepEqual(replacement.visibility(), [['google', 'gemini-4-argon']])
+  assert.equal(replacement.store.data.selfCheck, undefined)
+  await replacement.dispose()
+})
+
 test('disposal during a boot catalog fetch cancels it without arming a late timer', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'model-sync-dispose-'))
   t.after(() => rm(dir, { recursive: true, force: true }))

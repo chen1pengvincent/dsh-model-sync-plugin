@@ -103,6 +103,30 @@ test('a check with the switch off goes direct', async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
+test('a saved gateway entry follows only its owned address for discovery and forwarding', async (t) => {
+  const listed = []
+  const { controller, document, dir } = await controllerWith(async (input) => {
+    listed.push(input.baseURL)
+    return { api: 'google-generative-ai', models: [{ id: 'gemini-4-argon' }] }
+  })
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  controller.proxyState = async () => ({ enabled: false })
+  const route = document[PIAI].providers.google
+  const upstream = route.baseURL
+  const replacement = 'https://replacement.example/v1'
+  controller.store.data.gateway = { port: 41234, entries: { google: {
+    routeId: 'google', previousBaseURL: upstream, upstreamBaseURL: upstream,
+  } } }
+  route.baseURL = 'http://127.0.0.1:41234/g/google'
+  await controller.check()
+  assert.ok((await controller.refreshGatewayRoutes()).has('google'))
+  route.baseURL = replacement
+  await controller.check()
+  assert.deepEqual(listed, [upstream, replacement])
+  assert.equal((await controller.refreshGatewayRoutes()).has('google'), false)
+  assert.ok(controller.store.data.gateway.entries.google)
+})
+
 test('a check shares one native lookup across candidates and compares only upstream input changes', async (t) => {
   const ids = Array.from({ length: 100 }, (_, index) => `new-${index}`)
   let officialInput

@@ -248,6 +248,35 @@ test('boot clears an already restored route after the final ledger save failed',
   assert.equal(writes.length, 2)
 })
 
+test('undo and boot retain a route that was reselected while the earlier settings snapshot was in use', async (t) => {
+  const { ctx, controller, document, dir } = await controllerFor()
+  t.after(async () => { await controller.dispose(); await rm(dir, { recursive: true, force: true }) })
+  const { baseURL } = await controller.routeGateway({ provider: 'google' })
+  const edit = (value) => ctx.get('settings').mutate(PIAI, [{ op: 'set', path: ['providers', 'google', 'baseURL'], value }])
+  await edit(GOOGLE_BASE)
+  const snapshot = controller.store.snapshot.bind(controller.store)
+  controller.store.snapshot = async (...args) => {
+    const file = await snapshot(...args)
+    await edit(baseURL)
+    return file
+  }
+  await assert.rejects(controller.unrouteGateway({ provider: 'google' }), /changed during/)
+  assert.ok(controller.store.data.gateway.entries.google)
+
+  await edit(GOOGLE_BASE)
+  const llm = ctx.get('llm')
+  const list = llm.listModels.bind(llm)
+  llm.listModels = async (...args) => {
+    llm.listModels = list
+    await edit(baseURL)
+    return list(...args)
+  }
+  await controller.reconcileGatewayPort(controller.gatewayHandle.port)
+  assert.equal(document[PIAI].providers.google.baseURL, baseURL)
+  assert.ok(controller.store.data.gateway.entries.google)
+  assert.ok(controller.gatewayHandle)
+})
+
 test('a legacy row without port evidence cannot claim an arbitrary loopback service', async (t) => {
   const { controller, document, writes, dir } = await controllerFor()
   t.after(async () => { await controller.dispose(); await rm(dir, { recursive: true, force: true }) })
@@ -803,6 +832,33 @@ test('removing the last gateway-only model makes undo possible again', async () 
   }
 })
 
+test('gateway rollback follows external DSH model edits and rechecks them on a revision conflict', async (t) => {
+  const { ctx, controller, document, dir } = await controllerFor({
+    probe: { attribution: [...MIXED, ['brand-new', 'anthropic-messages']] },
+  })
+  t.after(async () => { await controller.dispose(); await rm(dir, { recursive: true, force: true }) })
+  const { baseURL } = await controller.routeGateway({ provider: 'google' })
+  controller.store.data.checks = {
+    google: { at: Date.now(), status: 'ok', protocol: 'openai-completions', added: [{ id: 'brand-new' }], gone: [] },
+  }
+  await controller.apply({ provider: 'google' })
+  const path = ['providers', 'google', 'models']
+  const full = document[PIAI].providers.google.models
+  const removed = { op: 'set', path, value: full.filter((model) => model.id !== 'brand-new') }
+  const settings = ctx.get('settings')
+  await settings.mutate(PIAI, [removed])
+  raceNextWrite(ctx, { op: 'set', path, value: full })
+  await assert.rejects(controller.unrouteGateway({ provider: 'google' }), /changed during/)
+  assert.equal(document[PIAI].providers.google.baseURL, baseURL)
+  assert.ok(controller.store.data.gateway.entries.google)
+  await settings.mutate(PIAI, [removed])
+  await controller.revertRoutedBases('listener unavailable')
+  assert.equal(document[PIAI].providers.google.baseURL, GOOGLE_BASE)
+  assert.equal(document[PIAI].providers.google.api, undefined)
+  assert.deepEqual(controller.store.data.gateway.entries, {})
+  assert.equal(controller.store.data.gateway.status, 'reverted')
+})
+
 test('a narrowed route can take a model the installed catalog does not describe, with the sizes discovery reported', async () => {
   // pi-ai's schema has no fallback for an id it has never seen: the entry needs
   // `contextWindow` and `maxTokens` itself, so the numbers from the upstream
@@ -998,6 +1054,7 @@ test('two starts at once open one listener', async () => {
   try {
     controller.store.data.gateway = {
       enabled: false,
+      port: 41234,
       entries: { google: { provider: 'google', routeId: 'google', previousBaseURL: GOOGLE_BASE, models: { 'gemini-4-argon': 'google-generative-ai' }, at: Date.now() } },
     }
     document[PIAI].providers.google.baseURL = 'http://127.0.0.1:41234/g/google'
