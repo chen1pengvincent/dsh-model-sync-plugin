@@ -733,6 +733,11 @@ test('a model added while routed is attributed, remembered, and blocks undo', as
     await controller.revertRoutedBases('listener unavailable')
     assert.equal(controller.store.data.gateway.status, 'revert-failed')
     assert.ok(controller.store.data.gateway.entries.google)
+    document[PIAI].providers.google.baseURL = GOOGLE_BASE
+    delete document[PIAI].providers.google.api
+    await controller.reconcileGatewayPort(41234)
+    await assert.rejects(controller.unrouteGateway({ provider: 'google' }), /收拢协议之后加进来/)
+    assert.ok(controller.store.data.gateway.entries.google)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
